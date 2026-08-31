@@ -1,7 +1,8 @@
 import * as path from "node:path";
-import { getWolfDir, ensureWolfDir, readJSON, writeJSON, readStdin, emitHookJSON, recordInjection, hookMain, getSessionFilePath } from "./shared.js";
+import { getWolfDir, ensureWolfDir, readJSON, readStdin, recordInjection, hookMain, getSessionFilePath, getProjectDir, detectAgent } from "./shared.js";
 import { mutateJSON, HOOK_LOCK_BUDGET_MS } from "./anatomy-lock.js";
 import { shouldSuggestFilter } from "./bash-filter.js";
+import { decodeProviderHook, encodeProviderResponse, type HookProvider } from "./provider-boundary.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PreToolUse[Bash] filter (Workstream J3): verbose test/build output is one of
@@ -24,6 +25,11 @@ import { shouldSuggestFilter } from "./bash-filter.js";
 
 type FilterMode = "suggest" | "rewrite" | "off";
 
+function hookProvider(): HookProvider {
+  const agent = detectAgent();
+  return agent === "claude" || agent === "codex" ? agent : "unknown";
+}
+
 function filterMode(wolfDir: string): FilterMode {
   const cfg = readJSON<{ openwolf?: { bash?: { filter_mode?: string } } }>(
     path.join(wolfDir, "config.json"), {}
@@ -39,17 +45,12 @@ async function main(): Promise<void> {
   if (mode === "off") { return; }
 
   const raw = await readStdin();
-  let input: { tool_input?: { command?: string }; session_id?: string };
-  try {
-    input = JSON.parse(raw);
-  } catch {
-    return;
-  }
+  const event = decodeProviderHook(hookProvider(), raw, getProjectDir());
+  if (!event || !shouldSuggestFilter(event.command)) return;
 
-  const command = input.tool_input?.command ?? "";
-  if (!shouldSuggestFilter(command)) { return; }
+  const command = event.command;
 
-  const sessionFile = getSessionFilePath(input);
+  const sessionFile = getSessionFilePath({ session_id: event.sessionId });
   // Once per session per command family: nagging every test run costs more
   // context than it saves.
   const family = command.trim().split(/\s+/).slice(0, 2).join(" ");
@@ -74,7 +75,7 @@ async function main(): Promise<void> {
     },
   );
 
-  if (emit) emitHookJSON("PreToolUse", { additionalContext: note });
+  if (emit) process.stdout.write(encodeProviderResponse(event.provider, { kind: "advisory", text: note }));
 }
 
 hookMain("pre-bash", main);
