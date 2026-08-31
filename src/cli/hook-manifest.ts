@@ -81,6 +81,7 @@ export const HOOK_FILES = [
   "pre-read.js",
   "pre-write.js",
   "pre-bash.js",
+  "provider-boundary.js",
   "post-bash.js",
   "bash-filter.js",
   "bash-output-governor.js",
