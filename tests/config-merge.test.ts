@@ -7,6 +7,23 @@ import * as path from "node:path";
 import { deepMergeMissing, mergeConfigDefaults } from "../src/cli/config-merge.ts";
 
 const tmpDir = () => fs.mkdtempSync(path.join(os.tmpdir(), "wolf-cfg-"));
+const DIST_AGENTS = path.resolve(import.meta.dirname, "..", "dist", "src", "agents", "index.js");
+
+async function codexAdapter(): Promise<{ install: (ctx: unknown) => { actions: string[]; warnings: string[] } }> {
+  assert.ok(fs.existsSync(DIST_AGENTS), "run pnpm exec tsc before this test");
+  const { resolveAgents } = await import(DIST_AGENTS);
+  const [adapter] = resolveAgents(["codex"]);
+  return adapter;
+}
+
+function codexProject(): { projectRoot: string; wolfDir: string; templatesDir: string } {
+  const projectRoot = fs.mkdtempSync(path.join(process.env.OPENWOLF_TEST_TMPDIR ?? "/dev/shm", "openwolf-codex-"));
+  const wolfDir = path.join(projectRoot, ".wolf");
+  const templatesDir = path.join(projectRoot, "templates");
+  fs.mkdirSync(wolfDir, { recursive: true });
+  fs.mkdirSync(templatesDir, { recursive: true });
+  return { projectRoot, wolfDir, templatesDir };
+}
 
 describe("deepMergeMissing", () => {
   test("adds missing keys without touching existing values", () => {
@@ -80,5 +97,60 @@ describe("mergeConfigDefaults", () => {
     const dir = tmpDir();
     assert.strictEqual(mergeConfigDefaults(path.join(dir, "config.json"), dir), false);
     assert.strictEqual(fs.existsSync(path.join(dir, "config.json")), false);
+  });
+});
+
+describe("Codex hook merge", () => {
+  test("installs one Bash pre-hook idempotently without changing user-owned configuration", async () => {
+    const adapter = await codexAdapter();
+    const ctx = codexProject();
+    try {
+      const codexDir = path.join(ctx.projectRoot, ".codex");
+      fs.mkdirSync(codexDir, { recursive: true });
+      const hooksPath = path.join(codexDir, "hooks.json");
+      const configPath = path.join(codexDir, "config.toml");
+      const configToml = "# user-owned\n[features]\nhooks = false\n";
+      fs.writeFileSync(configPath, configToml, "utf-8");
+      fs.writeFileSync(hooksPath, JSON.stringify({
+        version: 3,
+        hooks: {
+          PreToolUse: [{ matcher: "Read", hooks: [{ type: "command", command: "echo user-hook" }] }],
+        },
+      }, null, 2) + "\n", "utf-8");
+
+      const first = adapter.install(ctx);
+      const second = adapter.install(ctx);
+      const installed = JSON.parse(fs.readFileSync(hooksPath, "utf-8"));
+      const bashEntries = installed.hooks.PreToolUse.filter((entry: { matcher?: string }) => entry.matcher === "Bash");
+
+      assert.strictEqual(bashEntries.length, 1);
+      assert.strictEqual(bashEntries[0].hooks.length, 1);
+      assert.match(bashEntries[0].hooks[0].command, /\.wolf\/hooks\/pre-bash\.js/);
+      assert.strictEqual(installed.version, 3);
+      assert.strictEqual(installed.hooks.PreToolUse[0].hooks[0].command, "echo user-hook");
+      assert.strictEqual(fs.readFileSync(configPath, "utf-8"), configToml);
+      assert.ok(first.warnings.some((warning) => warning.includes('hooks = true')));
+      assert.ok(second.warnings.some((warning) => warning.includes('hooks = true')));
+    } finally {
+      fs.rmSync(ctx.projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("leaves malformed hooks bytes untouched while reporting the existing warning", async () => {
+    const adapter = await codexAdapter();
+    const ctx = codexProject();
+    try {
+      const hooksPath = path.join(ctx.projectRoot, ".codex", "hooks.json");
+      fs.mkdirSync(path.dirname(hooksPath), { recursive: true });
+      const malformed = '{"hooks": [}\n';
+      fs.writeFileSync(hooksPath, malformed, "utf-8");
+
+      const result = adapter.install(ctx);
+
+      assert.strictEqual(fs.readFileSync(hooksPath, "utf-8"), malformed);
+      assert.ok(result.warnings.some((warning) => warning.includes("hooks.json")));
+    } finally {
+      fs.rmSync(ctx.projectRoot, { recursive: true, force: true });
+    }
   });
 });
