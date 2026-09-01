@@ -54,7 +54,7 @@ export function runPreBash(
 ): string {
   if (mode === "off") return "";
   const event = dependencies.decodeProviderHook(provider, raw, projectRoot);
-  if (!event || !dependencies.shouldSuggestFilter(event.command)) return "";
+  if (event?.eventName !== "PreToolUse" || event.toolName !== "Bash" || !dependencies.shouldSuggestFilter(event.command)) return "";
 
   const command = event.command;
 

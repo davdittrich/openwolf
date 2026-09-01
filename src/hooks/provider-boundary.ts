@@ -114,7 +114,7 @@ export function decodeProviderHook(
     (eventName !== "PreToolUse" && eventName !== "PostToolUse") ||
     (toolName !== "Bash" && toolName !== "Read" && toolName !== "apply_patch")
   ) return null;
-  if (toolName !== "apply_patch" && eventName !== "PreToolUse") return null;
+  if (toolName === "Read" && eventName !== "PreToolUse") return null;
 
   const base = {
     provider,

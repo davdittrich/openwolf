@@ -30,14 +30,19 @@ async function main(): Promise<void> {
   } catch {
     return;
   }
-  if (detectAgent() === "codex" && input.tool_name === "apply_patch" &&
-      decodeProviderHook("codex", raw, getProjectDir(), projectRelativePath) === null) return;
+  const provider = detectAgent();
+  const projectRoot = getProjectDir();
+  const patchEvent = provider === "codex" && input.tool_name === "apply_patch"
+    ? decodeProviderHook("codex", raw, projectRoot, projectRelativePath)
+    : null;
+  if (provider === "codex" && input.tool_name === "apply_patch" && patchEvent === null) return;
 
-  // For Edit tool, the meaningful content is old_string + new_string
-  const content = input.tool_input?.content ?? "";
+  // For Edit tool, the meaningful content is old_string + new_string. Codex
+  // apply_patch carries its bounded patch command through the same policy seam.
+  const content = patchEvent?.command ?? input.tool_input?.content ?? "";
   const oldStr = input.tool_input?.old_string ?? "";
   const newStr = input.tool_input?.new_string ?? "";
-  const filePath = input.tool_input?.file_path ?? input.tool_input?.path ?? "";
+  const filePath = patchEvent?.affectedPaths?.[0] ?? input.tool_input?.file_path ?? input.tool_input?.path ?? "";
   const allContent = [content, oldStr, newStr].join("\n");
 
   if (!allContent.trim()) { return; }

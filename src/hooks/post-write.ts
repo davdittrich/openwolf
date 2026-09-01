@@ -87,11 +87,9 @@ async function main(): Promise<void> {
     return;
   }
 
-  const filePaths = [input.tool_input?.file_path ?? input.tool_input?.path ?? ""];
-  if (!filePaths || filePaths.length === 0) return;
-  for (const filePath of filePaths) {
-    recordPostWrite(input, filePath, wolfDir, projectRoot, sessionFile);
-  }
+  const filePath = input.tool_input?.file_path ?? input.tool_input?.path;
+  if (typeof filePath !== "string" || !filePath.trim()) return;
+  recordPostWrite(input, filePath, wolfDir, projectRoot, sessionFile);
 }
 
 function recordPostWrite(

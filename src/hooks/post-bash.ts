@@ -5,6 +5,7 @@ import {
   getWolfDir, ensureWolfDir, readJSON, writeJSON, readStdin,
   hookMain, getSessionFilePath, normalizePath, getProjectDir, projectRelativePath, detectAgent
 } from "./shared.js";
+import { decodeProviderHook } from "./provider-boundary.js";
 import {
   classifyCommand, condenseOutput, estimateTokens,
   DEFAULT_GOVERNOR_CONFIG, type GovernorConfig, type GovernorAction
@@ -79,10 +80,13 @@ async function main(): Promise<void> {
     return;
   }
 
-  const command = input.tool_input?.command ?? "";
+  const normalized = decodeProviderHook(provider, raw, getProjectDir());
+  if (normalized?.eventName !== "PostToolUse" || normalized.toolName !== "Bash") return;
+
+  const command = normalized.command;
   const resp = input.tool_response;
   const stdout = typeof resp?.stdout === "string" ? resp.stdout : "";
-  if (!command || !resp) return;
+  if (!resp) return;
 
   const sessionFile = getSessionFilePath(input);
   const notes: string[] = [];

@@ -249,7 +249,7 @@ describe("provider Bash boundary", () => {
       const output = JSON.parse(result.stdout);
       assert.match(output.hookSpecificOutput.additionalContext, /patch-signature/);
       const session = JSON.parse(fs.readFileSync(path.join(root, ".wolf", "hooks", "sessions", "patch-policy.json"), "utf-8"));
-      assert.strictEqual(session.injections.filter((entry: { type: string }) => entry.type === "cerebrum_buglog").length, 1);
+      assert.ok(session.injected_by_source.cerebrum_buglog > 0);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
