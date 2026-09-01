@@ -115,10 +115,24 @@ describe("codex adapter hooks.json", { skip: !haveDist ? "dist not built" : fals
   test("install is idempotent: a second run does not duplicate OpenWolf entries", async () => {
     const codexAdapter = await loadCodexAdapter();
     const ctx = project();
+    const hooksPath = path.join(ctx.projectRoot, ".codex", "hooks.json");
+    fs.mkdirSync(path.dirname(hooksPath), { recursive: true });
+    fs.writeFileSync(
+      hooksPath,
+      JSON.stringify({
+        version: 3,
+        hooks: { PostToolUse: [{ matcher: "Custom", hooks: [{ type: "command", command: "echo mine" }] }] },
+      }),
+      "utf-8",
+    );
     codexAdapter.install(ctx);
     codexAdapter.install(ctx);
-    const written = JSON.parse(fs.readFileSync(path.join(ctx.projectRoot, ".codex", "hooks.json"), "utf-8"));
+    const written = JSON.parse(fs.readFileSync(hooksPath, "utf-8"));
     assert.strictEqual(written.hooks.SessionStart.length, 1);
-    assert.strictEqual(written.hooks.PostToolUse.length, 2);
+    const postToolUse = written.hooks.PostToolUse as Array<{ matcher: string; hooks: Array<{ command: string }> }>;
+    const openWolfEntries = postToolUse.filter((entry) => entry.hooks.some((hook) => hook.command.includes(".wolf/hooks")));
+    assert.deepStrictEqual(openWolfEntries.map((entry) => entry.matcher), ["Read", "Edit|Write|MultiEdit|apply_patch", "Bash"]);
+    assert.deepStrictEqual(postToolUse.filter((entry) => entry.matcher === "Custom"), [{ matcher: "Custom", hooks: [{ type: "command", command: "echo mine" }] }]);
+    assert.strictEqual(written.version, 3);
   });
 });

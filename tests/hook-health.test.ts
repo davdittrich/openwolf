@@ -122,18 +122,18 @@ describe("compiled hook integration", { skip: !haveDist ? "dist/hooks not built"
       });
 
     // Session A reads the file twice (full): pre-read + post-read then pre-read again.
-    await runHook("pre-read.js", { session_id: "sessA", tool_input: { file_path: target } });
+    await runHook("pre-read.js", { hook_event_name: "PreToolUse", tool_name: "Read", session_id: "sessA", tool_input: { file_path: target } });
     await runHook("post-read.js", { session_id: "sessA", tool_input: { file_path: target }, tool_response: { file: { content: "export const x = 1;\n" } } });
-    const dupA = await runHook("pre-read.js", { session_id: "sessA", tool_input: { file_path: target } });
+    const dupA = await runHook("pre-read.js", { hook_event_name: "PreToolUse", tool_name: "Read", session_id: "sessA", tool_input: { file_path: target } });
     assert.ok(dupA.stdout.includes("already read this session"), "same session sees the duplicate warning");
 
     // Session B reads the same file for the FIRST time: no warning.
-    const freshB = await runHook("pre-read.js", { session_id: "sessB", tool_input: { file_path: target } });
+    const freshB = await runHook("pre-read.js", { hook_event_name: "PreToolUse", tool_name: "Read", session_id: "sessB", tool_input: { file_path: target } });
     assert.ok(!freshB.stdout.includes("already read this session"), "other session must not inherit A's reads");
 
     // Ranged read in a third session then a full read: no duplicate warning.
-    await runHook("pre-read.js", { session_id: "sessC", tool_input: { file_path: target, offset: 1, limit: 1 } });
-    const fullAfterRanged = await runHook("pre-read.js", { session_id: "sessC", tool_input: { file_path: target } });
+    await runHook("pre-read.js", { hook_event_name: "PreToolUse", tool_name: "Read", session_id: "sessC", tool_input: { file_path: target, offset: 1, limit: 1 } });
+    const fullAfterRanged = await runHook("pre-read.js", { hook_event_name: "PreToolUse", tool_name: "Read", session_id: "sessC", tool_input: { file_path: target } });
     assert.ok(!fullAfterRanged.stdout.includes("already read this session"), "ranged contact must not mark the file as fully read");
 
     assert.ok(fs.existsSync(path.join(hooksDir, "sessions", "sessA.json")));
