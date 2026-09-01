@@ -238,31 +238,50 @@ describe("provider Bash boundary", () => {
     }
   });
 
-  test("normalizes Claude and Codex Bash fixtures before the shared policy", async () => {
-    const { decodeProviderHook } = await import("../src/hooks/provider-boundary.ts");
-    const root = tmpProject();
-    try {
-      const claude = decodeProviderHook("claude", JSON.stringify(claudeBash), root);
-      const codex = decodeProviderHook("codex", JSON.stringify(codexBash), root);
-      assert.ok(claude);
-      assert.ok(codex);
+  test("the production pre-Bash runner decodes, filters, and encodes each provider exactly once", async () => {
+    const { runPreBash } = await import(pathToFileURL(path.join(DIST_HOOKS, "pre-bash.js")).href);
+    const { decodeProviderHook, encodeProviderResponse } = await import("../src/hooks/provider-boundary.ts");
+    for (const [provider, payload] of [["claude", claudeBash], ["codex", codexBash]] as const) {
+      const root = tmpProject();
+      const calls: Array<{ stage: string; provider?: string; command?: string; projectRoot?: string }> = [];
+      try {
+        const output = runPreBash(JSON.stringify(payload), provider, root, path.join(root, ".wolf"), "suggest", {
+          decodeProviderHook(actualProvider, raw, projectRoot) {
+            calls.push({ stage: "decoder", provider: actualProvider, projectRoot });
+            return decodeProviderHook(actualProvider, raw, projectRoot);
+          },
+          shouldSuggestFilter(command) {
+            calls.push({ stage: "policy", command });
+            return shouldSuggestFilter(command);
+          },
+          encodeProviderResponse(actualProvider, intent) {
+            calls.push({ stage: "encoder", provider: actualProvider });
+            return encodeProviderResponse(actualProvider, intent);
+          },
+        });
+        assert.deepStrictEqual(calls, [
+          { stage: "decoder", provider, projectRoot: root },
+          { stage: "policy", command: "pnpm test" },
+          { stage: "encoder", provider },
+        ]);
+        assert.strictEqual(JSON.parse(output).hookSpecificOutput.hookEventName, "PreToolUse");
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
 
-      const policyCalls: Array<{ command: string }> = [];
-      const policy = (event: { command: string }) => {
-        policyCalls.push({ command: event.command });
-        return shouldSuggestFilter(event.command);
-      };
-      assert.strictEqual(policy(claude), true);
-      assert.strictEqual(policy(codex), true);
-      assert.deepStrictEqual(policyCalls, [{ command: "pnpm test" }, { command: "pnpm test" }]);
-      assert.deepStrictEqual(
-        { command: claude.command, projectRoot: claude.projectRoot },
-        { command: codex.command, projectRoot: codex.projectRoot },
-      );
-      assert.strictEqual(claude.provider, "claude");
-      assert.strictEqual(codex.provider, "codex");
-      assert.ok(!("turnId" in claude));
-      assert.ok(!("turnId" in codex));
+  test("the production pre-Bash runner stops malformed input after its decoder", async () => {
+    const { runPreBash } = await import(pathToFileURL(path.join(DIST_HOOKS, "pre-bash.js")).href);
+    const root = tmpProject();
+    const calls: string[] = [];
+    try {
+      assert.strictEqual(runPreBash("{", "claude", root, path.join(root, ".wolf"), "suggest", {
+        decodeProviderHook() { calls.push("decoder"); return null; },
+        shouldSuggestFilter() { calls.push("policy"); return true; },
+        encodeProviderResponse() { calls.push("encoder"); return "unexpected"; },
+      }), "");
+      assert.deepStrictEqual(calls, ["decoder"]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
