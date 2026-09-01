@@ -25,15 +25,19 @@ function codexConfig(root: string): void {
   fs.writeFileSync(path.join(root, ".codex", "hooks.json"), JSON.stringify({ hooks: {} }), "utf-8");
 }
 
-function receipt(root: string, status: "confirmed" | "failed"): void {
+function receipts(root: string, entries: Array<{ ended?: string; status: "confirmed" | "failed"; provider?: "claude" | "codex" }>): void {
   fs.writeFileSync(path.join(root, ".wolf", "token-ledger.json"), JSON.stringify({
     lifetime: {},
-    sessions: [{ ended: "2026-09-01T00:00:00Z", totals: {}, verified: {
-      provider: "claude", status, variant: "claude_attachment",
+    sessions: entries.map(({ ended, status, provider = "claude" }) => ({ ended, totals: {}, verified: {
+      provider, status, variant: "claude_attachment",
       hooks_fired: 1, hooks_failed: status === "failed" ? 1 : 0,
       injections_delivered: 0, injection_tokens_delivered: 0, per_hook: {},
-    } }],
+    } })),
   }), "utf-8");
+}
+
+function receipt(root: string, status: "confirmed" | "failed"): void {
+  receipts(root, [{ ended: "2026-09-01T00:00:00Z", status }]);
 }
 
 describe("openwolf-check provider evidence", () => {
@@ -62,6 +66,62 @@ describe("openwolf-check provider evidence", () => {
     const failed = project((dir) => { codexConfig(dir); receipt(dir, "failed"); });
     assert.strictEqual(run(failed).providers.claude.health, "failed");
     assert.strictEqual(run(failed).providers.codex.health, "unknown");
+  });
+
+  test("the latest valid receipt supersedes array order, with failed ties fail-closed", () => {
+    const recovered = project((dir) => {
+      receipts(dir, [
+        { ended: "2026-09-01T00:00:00Z", status: "failed" },
+        { ended: "2026-09-01T01:00:00Z", status: "confirmed" },
+      ]);
+    });
+    assert.strictEqual(run(recovered).providers.claude.health, "active");
+
+    const reversed = project((dir) => {
+      receipts(dir, [
+        { ended: "2026-09-01T01:00:00Z", status: "confirmed" },
+        { ended: "2026-09-01T00:00:00Z", status: "failed" },
+      ]);
+    });
+    assert.strictEqual(run(reversed).providers.claude.health, "active");
+
+    const laterFailure = project((dir) => {
+      receipts(dir, [
+        { ended: "2026-09-01T00:00:00Z", status: "confirmed" },
+        { ended: "2026-09-01T01:00:00Z", status: "failed" },
+      ]);
+    });
+    assert.strictEqual(run(laterFailure).providers.claude.health, "failed");
+
+    const tied = project((dir) => {
+      receipts(dir, [
+        { ended: "2026-09-01T01:00:00Z", status: "confirmed" },
+        { ended: "2026-09-01T01:00:00Z", status: "failed" },
+      ]);
+    });
+    assert.strictEqual(run(tied).providers.claude.health, "failed");
+  });
+
+  test("the latest selfcheck is self-tested, but invalid receipt times never override valid authority", () => {
+    const selfTested = project((dir) => {
+      codexConfig(dir);
+      receipts(dir, [{ ended: "2000-01-01T00:00:00Z", status: "failed", provider: "codex" }]);
+      const hooks = path.join(dir, ".wolf", "hooks");
+      fs.mkdirSync(hooks, { recursive: true });
+      fs.writeFileSync(path.join(hooks, "session-start.js"), "process.exit(0);", "utf-8");
+    });
+    assert.strictEqual(run(selfTested).providers.codex.health, "self-tested");
+
+    const validWins = project((dir) => {
+      receipts(dir, [
+        { ended: "not-a-date", status: "failed" },
+        { ended: "2026-09-01T01:00:00Z", status: "confirmed" },
+        { status: "failed" },
+      ]);
+    });
+    const json = run(validWins);
+    assert.strictEqual(json.providers.claude.health, "active");
+    assert.match(run(validWins, false), /claude.*active/i);
   });
 
   test("failed selfcheck stays failed with a bounded non-sensitive diagnostic", () => {

@@ -72,39 +72,67 @@ function configuredCodex() {
 
 function selfcheck() {
   const hook = hookFiles.includes("session-start.js") ? "session-start.js" : hookFiles[0];
-  if (!hook) return { ran: false, ok: false, diagnostic: null };
+  if (!hook) return { ran: false, ok: false, diagnostic: null, observedAt: null };
   const result = spawnSync(process.execPath, [path.join(wolfDir, "hooks", hook), "--selfcheck"], {
     cwd: root,
     env: { ...process.env, OPENWOLF_PROJECT_ROOT: root },
     encoding: "utf-8",
     timeout: 5_000,
   });
-  if (result.status === 0) return { ran: true, ok: true, diagnostic: null };
-  return { ran: true, ok: false, diagnostic: "installed hook selfcheck failed" };
+  const observedAt = new Date().toISOString();
+  if (result.status === 0) return { ran: true, ok: true, diagnostic: null, observedAt };
+  return { ran: true, ok: false, diagnostic: "installed hook selfcheck failed", observedAt };
+}
+
+function observedAt(value) {
+  const timestamp = typeof value === "string" ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function latestObservation(current, next) {
+  if (!current) return next;
+  if (next.at > current.at) return next;
+  if (next.at < current.at) return current;
+  return next.status === "failed" ? next : current;
 }
 
 function receipt(provider, ledger) {
-  let confirmed = false;
+  let latest = null;
   for (const session of ledger?.sessions ?? []) {
     const evidence = session?.verified;
     if (!evidence || typeof evidence !== "object") continue;
     const evidenceProvider = evidence.provider ?? "claude";
     if (evidenceProvider !== provider) continue;
-    if (evidence.status === "failed" || (!evidence.status && evidence.hooks_failed > 0)) return "failed";
-    if (evidence.status === "confirmed" || (!evidence.status && evidence.hooks_fired > 0)) confirmed = true;
+    const at = observedAt(session.ended);
+    if (at === null) continue;
+    const status = evidence.status === "failed" || (!evidence.status && evidence.hooks_failed > 0)
+      ? "failed"
+      : evidence.status === "confirmed" || (!evidence.status && evidence.hooks_fired > 0)
+        ? "confirmed"
+        : null;
+    if (status) latest = latestObservation(latest, { status, at });
   }
-  return confirmed ? "confirmed" : "unknown";
+  return latest;
 }
 
 function providerReport(provider, configured, selfTest, ledger) {
-  const receiptState = receipt(provider, ledger);
-  const failed = receiptState === "failed" || (selfTest.ran && !selfTest.ok);
+  const receiptObservation = receipt(provider, ledger);
+  const selfTestAt = selfTest.ran ? observedAt(selfTest.observedAt) : null;
+  const selfTestObservation = selfTestAt === null ? null : {
+    status: selfTest.ok ? "self-tested" : "failed",
+    at: selfTestAt,
+    diagnostic: selfTest.diagnostic,
+  };
+  const latest = selfTestObservation
+    ? latestObservation(receiptObservation, selfTestObservation)
+    : receiptObservation;
+  const health = latest?.status ?? "unknown";
   return {
     configured,
     self_tested: selfTest.ran && selfTest.ok,
-    receipt: receiptState,
-    health: failed ? "failed" : receiptState === "confirmed" ? "active" : selfTest.ok ? "self-tested" : "unknown",
-    ...(failed ? { diagnostic: selfTest.diagnostic ?? "provider receipt failed" } : {}),
+    receipt: receiptObservation?.status ?? "unknown",
+    health: health === "confirmed" ? "active" : health,
+    ...(health === "failed" ? { diagnostic: latest?.diagnostic ?? "provider receipt failed" } : {}),
   };
 }
 
@@ -123,10 +151,10 @@ const claudeConfigured = configuredClaude();
 const codexConfigured = configuredCodex();
 const installedSelfTest = claudeConfigured || codexConfigured
   ? selfcheck()
-  : { ran: false, ok: false, diagnostic: null };
+  : { ran: false, ok: false, diagnostic: null, observedAt: null };
 report.providers = {
-  claude: providerReport("claude", claudeConfigured, claudeConfigured ? installedSelfTest : { ran: false, ok: false, diagnostic: null }, ledger),
-  codex: providerReport("codex", codexConfigured, codexConfigured ? installedSelfTest : { ran: false, ok: false, diagnostic: null }, ledger),
+  claude: providerReport("claude", claudeConfigured, claudeConfigured ? installedSelfTest : { ran: false, ok: false, diagnostic: null, observedAt: null }, ledger),
+  codex: providerReport("codex", codexConfigured, codexConfigured ? installedSelfTest : { ran: false, ok: false, diagnostic: null, observedAt: null }, ledger),
 };
 report.lifetime = {
   sessions: lt.total_sessions ?? 0,
