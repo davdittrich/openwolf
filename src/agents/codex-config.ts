@@ -1,6 +1,9 @@
 import * as path from "node:path";
+import { parse } from "smol-toml";
 
 export type CodexHooksFeatureState = "enabled" | "disabled" | "ambiguous";
+
+const MAX_CONFIG_BYTES = 1024 * 1024;
 
 /** Render the provider command once so installation and inspection cannot drift. */
 export function renderCodexHookCommand(projectRoot: string, script: string): string {
@@ -10,39 +13,21 @@ export function renderCodexHookCommand(projectRoot: string, script: string): str
 /** Read the effective [features] hooks fact without changing user-owned TOML. */
 export function parseCodexHooksFeature(config: string | null): CodexHooksFeatureState {
   if (config === null) return "enabled";
+  if (Buffer.byteLength(config, "utf-8") > MAX_CONFIG_BYTES) return "ambiguous";
 
-  let section = "";
-  let malformed = false;
-  const values = new Map<string, boolean>();
-
-  for (const rawLine of config.split(/\r?\n/)) {
-    const trimmed = rawLine.replace(/\s+#.*$/, "").trim();
-    if (!trimmed) continue;
-    const header = trimmed.match(/^\[([A-Za-z0-9_-]+)\]$/);
-    if (header) {
-      section = header[1];
-      continue;
-    }
-    if (trimmed.startsWith("[")) {
-      malformed = true;
-      continue;
-    }
-    if (section !== "features") continue;
-    const assignment = trimmed.match(/^(hooks|codex_hooks)\s*=\s*(.*?)$/);
-    if (!assignment) continue;
-    if (assignment[2] !== "true" && assignment[2] !== "false") {
-      malformed = true;
-      continue;
-    }
-    if (values.has(assignment[1])) {
-      malformed = true;
-      continue;
-    }
-    values.set(assignment[1], assignment[2] === "true");
+  let document: Record<string, unknown>;
+  try {
+    document = parse(config);
+  } catch {
+    return "ambiguous";
   }
+  const features = document.features;
+  if (features === undefined) return "enabled";
+  if (features === null || typeof features !== "object" || Array.isArray(features)) return "ambiguous";
 
-  const canonical = values.get("hooks");
-  const alias = values.get("codex_hooks");
-  if (malformed || (canonical !== undefined && alias !== undefined && canonical !== alias)) return "ambiguous";
+  const { hooks: canonical, codex_hooks: alias } = features as Record<string, unknown>;
+  if ((canonical !== undefined && typeof canonical !== "boolean") ||
+      (alias !== undefined && typeof alias !== "boolean") ||
+      (typeof canonical === "boolean" && typeof alias === "boolean" && canonical !== alias)) return "ambiguous";
   return (canonical ?? alias ?? true) ? "enabled" : "disabled";
 }
