@@ -51,7 +51,12 @@ function pack(root: string): { archive: string; extracted: string } {
   fs.mkdirSync(extracted);
   const unpacked = spawnSync("tar", ["-xzf", archive, "-C", extracted], { encoding: "utf-8" });
   assert.strictEqual(unpacked.status, 0, unpacked.stderr);
-  return { archive, extracted: path.join(extracted, "package") };
+  const packageDirectory = path.join(extracted, "package");
+  const smolToml = path.join(packageRoot, "node_modules", "smol-toml");
+  assert.ok(fs.existsSync(smolToml), "locked runtime dependency must be installed for package verification");
+  fs.mkdirSync(path.join(packageDirectory, "node_modules"), { recursive: true });
+  fs.cpSync(smolToml, path.join(packageDirectory, "node_modules", "smol-toml"), { recursive: true });
+  return { archive, extracted: packageDirectory };
 }
 
 test("the packed checker is shipped, read-only, and bound to its inspected project", () => {
