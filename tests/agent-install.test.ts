@@ -15,6 +15,7 @@ import * as path from "node:path";
 // index.js for readSnippet(), so entering the cycle at codex.js hits the
 // adapter registry before it is initialized.
 const DIST_AGENTS = path.resolve(import.meta.dirname ?? ".", "..", "dist", "src", "agents", "index.js");
+const DIST_CODEX_CONFIG = path.resolve(import.meta.dirname ?? ".", "..", "dist", "src", "agents", "codex-config.js");
 
 async function loadCodexAdapter(): Promise<{ install: (ctx: unknown) => { actions: string[]; warnings: string[] } }> {
   const { resolveAgents } = await import(DIST_AGENTS);
@@ -43,6 +44,14 @@ async function project<T>(
 describe("codex adapter hooks.json", () => {
   test("runs against the build produced by pnpm test", () => {
     assert.ok(fs.existsSync(DIST_AGENTS), "pnpm test must build dist before importing the Codex adapter");
+  });
+
+  test("renders a canonical Node command for Windows-shaped roots", async () => {
+    const { renderCodexHookCommand } = await import(DIST_CODEX_CONFIG);
+    assert.strictEqual(
+      renderCodexHookCommand("C:\\Open Wolf", "pre-write.js"),
+      'node "C:/Open Wolf/.wolf/hooks/pre-write.js"',
+    );
   });
 
   test("a malformed existing hooks.json is left byte-identical and warned about", async () => await project(async (ctx) => {
