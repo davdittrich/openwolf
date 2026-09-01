@@ -97,23 +97,11 @@ function configuredCodex() {
   }, { section: "", enabled: true, seen: false, valid: true });
   if (!feature.valid || !feature.enabled) return false;
 
-  const records = [];
-  const collectRecords = (value, event) => {
-    if (Array.isArray(value)) return value.forEach((item) => collectRecords(item, event));
-    if (!value || typeof value !== "object") return;
-    if (event !== null && typeof value.matcher === "string" && Array.isArray(value.hooks)) {
-      value.hooks.forEach((handler) => {
-        if (handler && typeof handler === "object") {
-          records.push({ event, matcher: value.matcher, type: handler.type, command: handler.command });
-        }
-      });
-    }
-    Object.entries(value).forEach(([key, child]) => collectRecords(child, event ?? key));
-  };
-  Object.entries(parsed.hooks).forEach(([event, value]) => collectRecords(value, event));
-  return codexHookSurface.every(([event, matcher, script]) => records.some((record) =>
-    record.event === event && record.matcher === matcher && record.type === "command" &&
-    record.command === `node "${path.join(root, ".wolf", "hooks", script)}"`));
+  return codexHookSurface.every(([event, matcher, script]) =>
+    Array.isArray(parsed.hooks[event]) && parsed.hooks[event].some((entry) =>
+      entry && typeof entry === "object" && entry.matcher === matcher && Array.isArray(entry.hooks) &&
+      entry.hooks.some((handler) => handler && typeof handler === "object" &&
+        handler.type === "command" && handler.command === `node "${path.join(root, ".wolf", "hooks", script)}"`)));
 }
 
 function selfcheck(hooks, diagnostic) {
