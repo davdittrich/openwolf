@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
+import { verifyHookDelivery } from "../src/hooks/hook-attachments.ts";
 
 const check = path.join(import.meta.dirname, "..", "scripts", "openwolf-check.mjs");
 
@@ -307,6 +308,47 @@ describe("openwolf-check provider evidence", () => {
       ]);
     }, run).providers;
     assert.strictEqual(laterValidWins.claude.health, "active");
+  });
+
+  test("only writer-coherent delivery counters and failure details are receipt authority", () => {
+    const writerEvidence = withProject((root) => {
+      const transcript = path.join(root, "writer.jsonl");
+      fs.writeFileSync(transcript, `${JSON.stringify({ type: "attachment", attachment: {
+        type: "hook_success", command: `node \"${path.join(root, ".wolf", "hooks", "session-start.js")}\"`, exitCode: 0,
+        stdout: JSON.stringify({ hookSpecificOutput: { additionalContext: "writer evidence" } }), stderr: "",
+      } })}\n`, "utf-8");
+      return verifyHookDelivery("claude", transcript);
+    });
+    const writerFailure = withProject((root) => {
+      const transcript = path.join(root, "writer-failure.jsonl");
+      fs.writeFileSync(transcript, `${JSON.stringify({ type: "attachment", attachment: {
+        type: "hook_non_blocking_error", command: `node \"${path.join(root, ".wolf", "hooks", "post-write.js")}\"`, exitCode: 1,
+        stdout: "", stderr: "writer failure",
+      } })}\n`, "utf-8");
+      return verifyHookDelivery("claude", transcript);
+    });
+    assert.strictEqual(writerEvidence.status, "confirmed");
+    assert.strictEqual(writerFailure.status, "failed");
+
+    const accepted = project((root) => {
+      receipts(root, [{ ended: "2026-09-01T00:00:00Z", verified: writerEvidence }]);
+    }, run).providers;
+    assert.strictEqual(accepted.claude.health, "active");
+    assert.strictEqual(accepted.codex.health, "unknown");
+
+    const { last_failure: _failure, ...missingFailure } = writerFailure;
+    const mutants = [
+      { name: "tokens without deliveries", verified: { ...writerEvidence, injections_delivered: 0, injection_tokens_delivered: 1 } },
+      { name: "deliveries without tokens", verified: { ...writerEvidence, injections_delivered: 1, injection_tokens_delivered: 0 } },
+      { name: "missing writer failure detail", verified: missingFailure },
+    ];
+    for (const mutant of mutants) {
+      const providers = project((root) => {
+        receipts(root, [{ ended: "2026-09-01T00:00:00Z", verified: mutant.verified }]);
+      }, run).providers;
+      assert.strictEqual(providers.claude.health, "unknown", mutant.name);
+      assert.strictEqual(providers.codex.health, "unknown", mutant.name);
+    }
   });
 
   test("only confirmed receipt is active and failure is not erased", () => {
