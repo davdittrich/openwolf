@@ -251,6 +251,65 @@ describe("provider hook boundary", () => {
     }
   });
 
+  test("invalidates every unique Codex patch path in the absolute read-key domain", () => {
+    assert.ok(fs.existsSync(path.join(DIST_HOOKS, "post-write.js")), "run pnpm build:hooks before this test");
+    const root = projectRoot();
+    const sessionId = "absolute-read-keys";
+    const patchPaths = ["src/add.ts", "src/update.ts", "src/delete.ts", "src/from.ts", "src/to.ts"];
+    const untouchedPath = path.resolve(root, "src/untouched.ts").replace(/\\\\/g, "/");
+    const untouchedRead = { count: 2, tokens: 41, first_read: "unchanged" };
+    const command = [
+      "*** Begin Patch",
+      "*** Add File: src/add.ts",
+      "+created",
+      "*** Update File: src/update.ts",
+      "@@",
+      "+changed",
+      "*** Update File: src/update.ts",
+      "@@",
+      "+changed again",
+      "*** Delete File: src/delete.ts",
+      "*** Update File: src/from.ts",
+      "*** Move to: src/to.ts",
+      "*** End Patch",
+    ].join("\n");
+    try {
+      installCompiledHooks(root);
+      for (const file of patchPaths) fs.writeFileSync(path.join(root, file), "export {};\n");
+      const filesRead = Object.fromEntries(patchPaths.map((file) => [
+        path.resolve(root, file).replace(/\\\\/g, "/"),
+        { count: 1, tokens: 1, first_read: file },
+      ]));
+      filesRead[untouchedPath] = untouchedRead;
+      fs.mkdirSync(path.join(root, ".wolf", "hooks", "sessions"), { recursive: true });
+      fs.writeFileSync(path.join(root, ".wolf", "hooks", "sessions", `${sessionId}.json`), JSON.stringify({
+        files_written: [],
+        edit_counts: {},
+        files_read: filesRead,
+      }));
+
+      const result = spawnSync(process.execPath, [path.join(root, ".wolf", "hooks", "post-write.js")], {
+        input: JSON.stringify({
+          hook_event_name: "PostToolUse",
+          tool_name: "apply_patch",
+          session_id: sessionId,
+          tool_input: { command },
+        }),
+        encoding: "utf-8",
+        env: { ...process.env, CODEX_PROJECT_ROOT: root },
+      });
+      assert.strictEqual(result.status, 0);
+      assert.strictEqual(result.stdout, "");
+      assert.strictEqual(result.stderr, "");
+      const session = JSON.parse(fs.readFileSync(path.join(root, ".wolf", "hooks", "sessions", `${sessionId}.json`), "utf-8"));
+      assert.deepStrictEqual(session.files_read, { [untouchedPath]: untouchedRead });
+      assert.deepStrictEqual(session.files_written.map((entry: { file: string }) => entry.file), patchPaths);
+      assert.deepStrictEqual(session.edit_counts, Object.fromEntries(patchPaths.map((file) => [file, 1])));
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("removes deleted and moved sources from anatomy while retaining post-write bookkeeping", () => {
     assert.ok(fs.existsSync(path.join(DIST_HOOKS, "post-write.js")), "run pnpm build:hooks before this test");
     const root = projectRoot();
