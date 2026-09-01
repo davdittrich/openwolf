@@ -1,0 +1,62 @@
+import { describe, test } from "node:test";
+import * as assert from "node:assert";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { spawnSync } from "node:child_process";
+
+const DIST_AGENTS = path.resolve(import.meta.dirname, "..", "dist", "src", "agents", "index.js");
+const CHECK = path.resolve(import.meta.dirname, "..", "scripts", "openwolf-check.mjs");
+
+async function codexAdapter(): Promise<{ install: (ctx: { projectRoot: string; templatesDir: string }) => unknown }> {
+  const { resolveAgents } = await import(DIST_AGENTS);
+  return resolveAgents(["codex"])[0];
+}
+
+function check(root: string): boolean {
+  const result = spawnSync(process.execPath, [CHECK, root, "--json"], { encoding: "utf-8" });
+  assert.strictEqual(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout).providers.codex.configured;
+}
+
+function entry(config: { hooks: Record<string, Array<{ matcher: string; hooks: Array<{ type: string; command: string }> }>> }, script: string) {
+  for (const [event, entries] of Object.entries(config.hooks)) {
+    const candidate = entries.find((item) => item.hooks.some((hook) => hook.command.includes(`/${script}`)));
+    if (candidate) return { event, candidate, hook: candidate.hooks.find((item) => item.command.includes(`/${script}`))! };
+  }
+  throw new Error(`missing installed ${script}`);
+}
+
+describe("installed Codex hook checker contract", () => {
+  test("accepts actual adapter output and rejects each material mapping mutation", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "ow-codex-check-"));
+    try {
+      fs.mkdirSync(path.join(root, ".wolf", "hooks"), { recursive: true });
+      fs.mkdirSync(path.join(root, ".codex"), { recursive: true });
+      fs.writeFileSync(path.join(root, ".codex", "hooks.json"), JSON.stringify({ hooks: { Custom: [{ matcher: "User", hooks: [{ type: "command", command: "echo user" }] }] } }), "utf-8");
+      (await codexAdapter()).install({ projectRoot: root, templatesDir: path.join(root, "templates") });
+
+      const hooksPath = path.join(root, ".codex", "hooks.json");
+      const installed = JSON.parse(fs.readFileSync(hooksPath, "utf-8"));
+      assert.strictEqual(check(root), true);
+      assert.ok(JSON.stringify(installed.hooks.Custom).includes("echo user"), "user entry preserved");
+
+      const mutations: Array<[string, (value: typeof installed) => void]> = [
+        ["event", (value) => { value.hooks.SessionStart = []; }],
+        ["matcher", (value) => { entry(value, "session-start.js").candidate.matcher = "wrong"; }],
+        ["type", (value) => { entry(value, "stop.js").hook.type = "mcp_tool"; }],
+        ["project root", (value) => { const hook = entry(value, "session-start.js").hook; hook.command = hook.command.replace(root, `${root}-foreign`); }],
+        ["pre-Bash", (value) => { entry(value, "pre-bash.js").candidate.matcher = "Read"; }],
+        ["post-Bash", (value) => { entry(value, "post-bash.js").candidate.matcher = "Read"; }],
+      ];
+      for (const [name, mutate] of mutations) {
+        const mutated = JSON.parse(JSON.stringify(installed));
+        mutate(mutated);
+        fs.writeFileSync(hooksPath, JSON.stringify(mutated), "utf-8");
+        assert.strictEqual(check(root), false, name);
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
