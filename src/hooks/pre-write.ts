@@ -1,8 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getWolfDir, ensureWolfDir, readJSON, readBugLogFile, readMarkdown, readStdin, emitHookJSON, recordInjectionToSessionFile, hookMain, getSessionFilePath } from "./shared.js";
+import { getWolfDir, ensureWolfDir, readJSON, readBugLogFile, readMarkdown, readStdin, emitHookJSON, recordInjectionToSessionFile, hookMain, getSessionFilePath, detectAgent, getProjectDir, projectRelativePath } from "./shared.js";
 import { mutateJSON } from "./anatomy-lock.js";
 import { searchBugsFTS } from "./bug-index.js";
+import { decodeProviderHook } from "./provider-boundary.js";
 
 interface BugEntry {
   id: string;
@@ -23,12 +24,14 @@ async function main(): Promise<void> {
   const wolfDir = getWolfDir();
 
   const raw = await readStdin();
-  let input: { tool_input?: { content?: string; old_string?: string; new_string?: string; file_path?: string; path?: string }; session_id?: string };
+  let input: { tool_name?: string; tool_input?: { command?: string; content?: string; old_string?: string; new_string?: string; file_path?: string; path?: string }; session_id?: string };
   try {
     input = JSON.parse(raw);
   } catch {
     return;
   }
+  if (detectAgent() === "codex" && input.tool_name === "apply_patch" &&
+      decodeProviderHook("codex", raw, getProjectDir(), projectRelativePath) === null) return;
 
   // For Edit tool, the meaningful content is old_string + new_string
   const content = input.tool_input?.content ?? "";

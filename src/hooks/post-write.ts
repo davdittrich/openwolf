@@ -4,11 +4,13 @@ import * as crypto from "node:crypto";
 import {
   getWolfDir, ensureWolfDir, readJSON, writeJSON, readBugLogFile, readMarkdown,
   extractDescription, estimateTokens, appendMarkdown, timeShort, readStdin, normalizePath,
-  isSensitiveFile, getProjectDir, emitHookJSON, recordInjection, hookMain, getSessionFilePath
+  isSensitiveFile, getProjectDir, emitHookJSON, recordInjection, hookMain, getSessionFilePath,
+  detectAgent, projectRelativePath
 } from "./shared.js";
 import { loadStoreReconciled, saveStore, renderToFile, sha256 } from "./anatomy-store.js";
 import { withAnatomyLock, mutateJSON, HOOK_LOCK_BUDGET_MS } from "./anatomy-lock.js";
 import { extractSymbols, symbolsSupported, SYMBOL_MIN_TOKENS } from "./symbol-extractor.js";
+import { decodeProviderHook } from "./provider-boundary.js";
 
 // File types where a value/string change is normal content editing, not a bug
 // fix — auto bug detection never runs on these (see autoDetectBugFix). Without
@@ -46,13 +48,27 @@ interface BugLog {
   bugs: BugEntry[];
 }
 
+interface PostWriteInput {
+  hook_event_name?: string;
+  tool_name?: string;
+  tool_input?: {
+    command?: string;
+    file_path?: string;
+    path?: string;
+    content?: string;
+    old_string?: string;
+    new_string?: string;
+  };
+  session_id?: string;
+}
+
 async function main(): Promise<void> {
   ensureWolfDir();
   const wolfDir = getWolfDir();
   const projectRoot = getProjectDir();
 
   const raw = await readStdin();
-  let input: { tool_name?: string; tool_input?: { file_path?: string; path?: string; content?: string; old_string?: string; new_string?: string }; session_id?: string };
+  let input: PostWriteInput;
   try {
     input = JSON.parse(raw);
   } catch {
@@ -60,9 +76,27 @@ async function main(): Promise<void> {
   }
   const sessionFile = getSessionFilePath(input);
 
+  const provider = detectAgent();
+  const patchEvent = provider === "codex" && input.tool_name === "apply_patch"
+    ? decodeProviderHook("codex", raw, projectRoot, projectRelativePath)
+    : null;
+  const filePaths = patchEvent?.toolName === "apply_patch"
+    ? patchEvent.affectedPaths
+    : [input.tool_input?.file_path ?? input.tool_input?.path ?? ""];
+  if (!filePaths || filePaths.length === 0) return;
+  for (const filePath of filePaths) {
+    recordPostWrite(input, filePath, wolfDir, projectRoot, sessionFile);
+  }
+}
+
+function recordPostWrite(
+  input: PostWriteInput,
+  filePath: string,
+  wolfDir: string,
+  projectRoot: string,
+  sessionFile: string,
+): void {
   const toolName = input.tool_name ?? "Write";
-  const filePath = input.tool_input?.file_path ?? input.tool_input?.path ?? "";
-  if (!filePath) { return; }
 
   const absolutePath = path.isAbsolute(filePath) ? filePath : path.join(projectRoot, filePath);
 

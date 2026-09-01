@@ -1,12 +1,20 @@
+import * as path from "node:path";
+
 export type HookProvider = "claude" | "codex" | "unknown";
+export type SubagentAuthority = true | false | "unknown";
+export type ProjectPathResolver = (root: string, target: string) => string | null;
 
 export interface NormalizedHookEvent {
   provider: "claude" | "codex";
-  eventName: "PreToolUse";
-  toolName: "Bash";
+  eventName: "PreToolUse" | "PostToolUse";
+  toolName: "Bash" | "Read" | "apply_patch";
+  /** Empty only for Read, whose provider payload has no command. */
   command: string;
+  filePath?: string;
+  affectedPaths?: string[];
   sessionId?: string;
   projectRoot: string;
+  isSubagent: SubagentAuthority;
   variant: { turnId?: string };
 }
 
@@ -15,17 +23,74 @@ export type ProviderResponseIntent =
   | { kind: "advisory"; text: string }
   | { kind: "deny"; reason: string };
 
+const MAX_PATCH_BYTES = 1024 * 1024;
+const PATCH_START = "*** Begin Patch";
+const PATCH_END = "*** End Patch";
+const PATCH_HEADER = /^\*\*\* (Add|Update|Delete) File: ([^\r\n]+)$/;
+const PATCH_MOVE = /^\*\*\* Move to: ([^\r\n]+)$/;
+
 function record(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
     ? value as Record<string, unknown>
     : null;
 }
 
-/** Decode only the documented PreToolUse[Bash] overlap into trusted local data. */
+function claudeAuthority(event: Record<string, unknown>): SubagentAuthority {
+  if (!("agent_id" in event)) return false;
+  return typeof event.agent_id === "string" && event.agent_id.length > 0 ? true : "unknown";
+}
+
+function normalizePatchPath(rawPath: string, projectRoot: string, resolvePath: ProjectPathResolver): string | null {
+  if (!rawPath || rawPath.includes("\0") || path.isAbsolute(rawPath)) return null;
+  const parts = rawPath.replace(/\\/g, "/").split("/");
+  if (parts.some((part) => part === ".." || part === "")) return null;
+  const normalized = resolvePath(projectRoot, rawPath);
+  return normalized === null || normalized === "" ? null : normalized;
+}
+
+/** Extract a complete, containment-checked path set or nothing. */
+export function extractAffectedPatchPaths(
+  command: string,
+  projectRoot: string,
+  resolvePath?: ProjectPathResolver,
+): string[] | null {
+  if (!resolvePath || !projectRoot || command.length === 0 || command.length > MAX_PATCH_BYTES) return null;
+  const lines = command.replace(/\r\n/g, "\n").split("\n");
+  if (lines[0] !== PATCH_START || lines.at(-1) !== PATCH_END) return null;
+
+  const paths: string[] = [];
+  let pendingMove = false;
+  for (const line of lines.slice(1, -1)) {
+    const header = line.match(PATCH_HEADER);
+    if (header) {
+      const normalized = normalizePatchPath(header[2], projectRoot, resolvePath);
+      if (normalized === null) return null;
+      paths.push(normalized);
+      pendingMove = header[1] === "Update";
+      continue;
+    }
+    const move = line.match(PATCH_MOVE);
+    if (move) {
+      if (!pendingMove) return null;
+      const normalized = normalizePatchPath(move[1], projectRoot, resolvePath);
+      if (normalized === null) return null;
+      paths.push(normalized);
+      pendingMove = false;
+      continue;
+    }
+    if (line.startsWith("*** ")) return null;
+    pendingMove = false;
+  }
+  if (paths.length === 0) return null;
+  return [...new Set(paths)];
+}
+
+/** Decode only documented provider fields into the one shared transport seam. */
 export function decodeProviderHook(
   provider: HookProvider,
   raw: string,
   projectRoot: string,
+  resolvePath?: ProjectPathResolver,
 ): NormalizedHookEvent | null {
   if (provider === "unknown" || !projectRoot) return null;
 
@@ -36,22 +101,39 @@ export function decodeProviderHook(
     return null;
   }
   const event = record(input);
+  if (event === null) return null;
   const toolInput = record(event?.tool_input);
+  const toolName = event?.tool_name;
+  const eventName = event?.hook_event_name;
   if (
-    event?.hook_event_name !== "PreToolUse" ||
-    event.tool_name !== "Bash" ||
-    typeof toolInput?.command !== "string"
+    (eventName !== "PreToolUse" && eventName !== "PostToolUse") ||
+    (toolName !== "Bash" && toolName !== "Read" && toolName !== "apply_patch")
   ) return null;
 
-  return {
+  const base = {
     provider,
-    eventName: "PreToolUse",
-    toolName: "Bash",
-    command: toolInput.command,
+    eventName,
+    toolName,
     sessionId: typeof event.session_id === "string" ? event.session_id : undefined,
     projectRoot,
+    isSubagent: provider === "claude" ? claudeAuthority(event) : "unknown" as const,
     variant: provider === "codex" && typeof event.turn_id === "string" ? { turnId: event.turn_id } : {},
-  };
+  } as const;
+
+  if (toolName === "Read") {
+    const filePath = typeof toolInput?.file_path === "string"
+      ? toolInput.file_path
+      : typeof toolInput?.path === "string" ? toolInput.path : null;
+    return filePath === null ? null : { ...base, command: "", filePath };
+  }
+
+  if (typeof toolInput?.command !== "string") return null;
+  if (toolName === "apply_patch") {
+    if (provider !== "codex") return null;
+    const affectedPaths = extractAffectedPatchPaths(toolInput.command, projectRoot, resolvePath);
+    return affectedPaths === null ? null : { ...base, command: toolInput.command, affectedPaths };
+  }
+  return { ...base, command: toolInput.command };
 }
 
 /** Encode only the PreToolUse responses both providers currently support. */

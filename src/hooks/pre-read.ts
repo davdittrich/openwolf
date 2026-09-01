@@ -3,10 +3,11 @@ import * as path from "node:path";
 import {
   getWolfDir, ensureWolfDir, readJSON, writeJSON,
   estimateTokens, readStdin, normalizePath, getProjectDir, emitHookJSON, recordInjection,
-  hookMain, getSessionFilePath, projectRelativePath
+  hookMain, getSessionFilePath, projectRelativePath, detectAgent
 } from "./shared.js";
 import { lookupEntry } from "./anatomy-store.js";
 import { mutateJSON, HOOK_LOCK_BUDGET_MS } from "./anatomy-lock.js";
+import { decodeProviderHook, type HookProvider } from "./provider-boundary.js";
 
 interface FileRead {
   count: number;
@@ -35,6 +36,11 @@ interface SessionData {
 }
 
 type DuplicateMode = "warn" | "deny" | "off";
+
+function hookProvider(): HookProvider {
+  const agent = detectAgent();
+  return agent === "claude" || agent === "codex" ? agent : "unknown";
+}
 
 function duplicateMode(wolfDir: string): DuplicateMode {
   const cfg = readJSON<{ openwolf?: { reads?: { duplicate_mode?: string } } }>(
@@ -67,9 +73,14 @@ async function main(): Promise<void> {
   } catch {
     return;
   }
+  const provider = hookProvider();
+  const event = provider === "unknown"
+    ? null
+    : decodeProviderHook(provider, raw, getProjectDir());
+  if (provider !== "unknown" && (!event || event.toolName !== "Read")) return;
   const sessionFile = getSessionFilePath(input);
 
-  const filePath = input.tool_input?.file_path ?? input.tool_input?.path ?? "";
+  const filePath = event?.filePath ?? input.tool_input?.file_path ?? input.tool_input?.path ?? "";
   if (!filePath) { return; }
 
   // Ranged reads (offset/limit) are exactly what the symbol hints steer the
@@ -80,7 +91,7 @@ async function main(): Promise<void> {
   // Subagents share this session file but not the main thread's context: a
   // file the main thread read is unseen by a fresh subagent, so duplicate
   // handling stays hands-off for them.
-  const isSubagent = typeof input.agent_id === "string" && input.agent_id.length > 0;
+  const isSubagent = event ? event.isSubagent !== false : typeof input.agent_id === "string" && input.agent_id.length > 0;
 
   const normalizedFile = normalizePath(filePath);
 

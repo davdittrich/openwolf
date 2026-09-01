@@ -25,6 +25,11 @@ function projectRoot(): string {
   return root;
 }
 
+function relativePath(root: string, target: string): string | null {
+  const relative = path.relative(root, path.resolve(root, target)).replace(/\\/g, "/");
+  return relative === "" || relative === ".." || relative.startsWith("../") ? null : relative;
+}
+
 function installCompiledHooks(root: string): void {
   const hooksDir = path.join(root, ".wolf", "hooks");
   fs.mkdirSync(hooksDir, { recursive: true });
@@ -52,7 +57,7 @@ describe("provider hook boundary", () => {
         session_id: "session-1",
         turn_id: "turn-1",
         tool_input: { command: patchCommand },
-      }), root);
+      }), root, relativePath);
 
       assert.deepStrictEqual(
         claudeRead,
@@ -60,6 +65,7 @@ describe("provider hook boundary", () => {
           provider: "claude",
           eventName: "PreToolUse",
           toolName: "Read",
+          command: "",
           filePath: "src/a.ts",
           sessionId: "session-1",
           projectRoot: root,
@@ -96,7 +102,7 @@ describe("provider hook boundary", () => {
           "*** Update File: src/a.ts",
           "*** Update File: ./src/a.ts",
           "*** End Patch",
-        ].join("\n"), root),
+        ].join("\n"), root, relativePath),
         ["src/a.ts"],
       );
       for (const command of [
@@ -106,7 +112,7 @@ describe("provider hook boundary", () => {
         "*** Begin Patch\n*** End Patch",
         "*** Begin Patch\n*** Update File: src/a.ts",
       ]) {
-        assert.strictEqual(extractAffectedPatchPaths(command, root), null, command);
+        assert.strictEqual(extractAffectedPatchPaths(command, root, relativePath), null, command);
       }
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
