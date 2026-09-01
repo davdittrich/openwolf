@@ -82,18 +82,22 @@ function receipts(root: string, entries: Array<{
   injections_delivered?: unknown;
   injection_tokens_delivered?: unknown;
   per_hook?: unknown;
+  last_failure?: unknown;
 }>): void {
   fs.writeFileSync(path.join(root, ".wolf", "token-ledger.json"), JSON.stringify({
     lifetime: {},
-    sessions: entries.map(({ ended, status, provider = "claude", variant = "claude_attachment", verified, hooks_fired = 1, hooks_failed, injections_delivered = 0, injection_tokens_delivered = 0, per_hook = {} }) => ({
-      ended,
-      totals: {},
-      verified: verified ?? {
-        provider, status, variant,
-        hooks_fired, hooks_failed: hooks_failed ?? (status === "failed" ? 1 : 0),
-        injections_delivered, injection_tokens_delivered, per_hook,
-      },
-    })),
+    sessions: entries.map(({ ended, status, provider = "claude", variant = "claude_attachment", verified, hooks_fired = 1, hooks_failed, injections_delivered = 0, injection_tokens_delivered = 0, per_hook, last_failure }) => {
+      const failed = hooks_failed ?? (status === "failed" ? 1 : 0);
+      return {
+        ended,
+        totals: {},
+        verified: verified ?? {
+          provider, status, variant, hooks_fired, hooks_failed: failed, injections_delivered, injection_tokens_delivered,
+          per_hook: per_hook ?? { "session-start.js": { fired: hooks_fired, failed, last_exit: failed > 0 ? 1 : 0 } },
+          ...(last_failure === undefined ? {} : { last_failure }),
+        },
+      };
+    }),
   }), "utf-8");
 }
 
@@ -244,13 +248,34 @@ describe("openwolf-check provider evidence", () => {
       assert.strictEqual(providers.claude.health, "unknown", JSON.stringify(evidence));
     }
 
+    const malformedReceipts = [
+      { name: "empty legacy map", verified: { hooks_fired: 1, hooks_failed: 0, injections_delivered: 0, injection_tokens_delivered: 0, per_hook: {} } },
+      { name: "fired sum mismatch", verified: { hooks_fired: 2, hooks_failed: 0, injections_delivered: 0, injection_tokens_delivered: 0, per_hook: { "session-start.js": { fired: 1, failed: 0, last_exit: 0 } } } },
+      { name: "failed sum mismatch", verified: { hooks_fired: 1, hooks_failed: 1, injections_delivered: 0, injection_tokens_delivered: 0, per_hook: { "session-start.js": { fired: 1, failed: 0, last_exit: 0 } } } },
+      { name: "zero-fired entry", verified: { hooks_fired: 1, hooks_failed: 0, injections_delivered: 0, injection_tokens_delivered: 0, per_hook: { "session-start.js": { fired: 1, failed: 0, last_exit: 0 }, "post-read.js": { fired: 0, failed: 0, last_exit: 0 } } } },
+      { name: "nonzero exit without failure", verified: { hooks_fired: 1, hooks_failed: 0, injections_delivered: 0, injection_tokens_delivered: 0, per_hook: { "session-start.js": { fired: 1, failed: 0, last_exit: 1 } } } },
+      { name: "failure detail names successful hook", verified: { hooks_fired: 1, hooks_failed: 1, injections_delivered: 0, injection_tokens_delivered: 0, per_hook: { "session-start.js": { fired: 1, failed: 1, last_exit: 1 } }, last_failure: { hook: "post-read.js", stderr_head: "failure" } } },
+      { name: "unbounded failure detail", verified: { hooks_fired: 1, hooks_failed: 1, injections_delivered: 0, injection_tokens_delivered: 0, per_hook: { "session-start.js": { fired: 1, failed: 1, last_exit: 1 } }, last_failure: { hook: "session-start.js", stderr_head: "x".repeat(201) } } },
+    ];
+    for (const evidence of malformedReceipts) {
+      const providers = project((dir) => { receipts(dir, [{ ended: "2026-09-01T00:00:00Z", verified: evidence.verified }]); }, run).providers;
+      assert.strictEqual(providers.claude.health, "unknown", evidence.name);
+      assert.strictEqual(providers.codex.health, "unknown", evidence.name);
+    }
+
     const legacy = project((dir) => {
       receipts(dir, [{ ended: "2026-09-01T00:00:00Z", verified: {
-        hooks_fired: 1, hooks_failed: 0, injections_delivered: 0, injection_tokens_delivered: 0, per_hook: {},
+        hooks_fired: 1, hooks_failed: 0, injections_delivered: 0, injection_tokens_delivered: 0,
+        per_hook: { "session-start.js": { fired: 1, failed: 0, last_exit: 0 } },
       } }]);
     }, run).providers;
     assert.strictEqual(legacy.claude.health, "active");
     assert.strictEqual(legacy.codex.health, "unknown");
+
+    const historicalFailure = project((dir) => {
+      receipts(dir, [{ ended: "2026-09-01T00:00:00Z", status: "failed", hooks_fired: 2, hooks_failed: 1, per_hook: { "session-start.js": { fired: 2, failed: 1, last_exit: 0 } }, last_failure: { hook: "session-start.js", stderr_head: "earlier failure" } }]);
+    }, run).providers;
+    assert.strictEqual(historicalFailure.claude.health, "failed", "a later per-hook success does not make historical aggregate failure evidence malformed");
 
     const laterValidWins = project((dir) => {
       receipts(dir, [
