@@ -125,6 +125,33 @@ describe("verifyHookDelivery", () => {
     }));
   });
 
+  test("counts only allowlisted current-project attachment commands without executing them", () => {
+    const root = path.resolve(import.meta.dirname, "..");
+    const hooks = path.join(root, ".wolf", "hooks");
+    withTranscript([
+      hookLine({ hookName: "SessionStart:startup", command: `node "${path.join(hooks, "session-start.js")}"`, exitCode: 0 }),
+      hookLine({ hookName: "PreToolUse:Read", command: 'node "$CLAUDE_PROJECT_DIR/.wolf/hooks/pre-read.js"', exitCode: 0 }),
+      hookLine({ hookName: "PostToolUse:Write", command: `node "${hooks}/../hooks/post-write.js"`, exitCode: 0 }),
+      hookLine({ hookName: "PreToolUse:Bash", command: `node "${path.join(path.dirname(root), "foreign", ".wolf", "hooks", "pre-bash.js")}"`, exitCode: 0 }),
+      hookLine({ hookName: "PreToolUse:Bash", command: `node "${path.join(hooks, "unknown.js")}"`, exitCode: 0 }),
+    ], (transcript) => {
+      const evidence = verifyHookDelivery("claude", transcript);
+      assert.deepStrictEqual(evidence, {
+        provider: "claude",
+        status: "confirmed",
+        variant: "claude_attachment",
+        hooks_fired: 2,
+        hooks_failed: 0,
+        injections_delivered: 0,
+        injection_tokens_delivered: 0,
+        per_hook: {
+          "session-start.js": { fired: 1, failed: 0, last_exit: 0 },
+          "pre-read.js": { fired: 1, failed: 0, last_exit: 0 },
+        },
+      });
+    });
+  });
+
   test("keeps unsupported, absent, and schema-drifted provider authority unknown", () => {
     withTranscript([{ unsupported: true }], (drifted) => {
       assert.deepStrictEqual(verifyHookDelivery("codex", drifted), {
