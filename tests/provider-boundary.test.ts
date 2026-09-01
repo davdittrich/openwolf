@@ -224,6 +224,44 @@ describe("provider hook boundary", () => {
     }
   });
 
+  test("accepts current Codex Update context and terminal EOF separator forms", async () => {
+    const { extractAffectedPatchPaths } = await import("../src/hooks/provider-boundary.ts");
+    const root = projectRoot();
+    const forms = [
+      [
+        "*** Begin Patch",
+        "*** Update File: src/a.ts",
+        "@@",
+        "+before-empty-context",
+        "",
+        "+after-empty-context",
+        "*** End Patch",
+      ].join("\n"),
+      [
+        "*** Begin Patch",
+        "*** Update File: src/a.ts",
+        "@@",
+        "+before-terminal-eof",
+        "*** End of File",
+        "",
+        "*** End Patch",
+      ].join("\n"),
+    ];
+    try {
+      for (const command of forms) {
+        assert.deepStrictEqual(extractAffectedPatchPaths(command, root, relativePath), ["src/a.ts"], command);
+      }
+      assert.strictEqual(extractAffectedPatchPaths([
+        "*** Begin Patch",
+        "*** Update File: src/a.ts",
+        "*** Move to: src/b.ts",
+        "*** End Patch",
+      ].join("\n"), root, relativePath), null);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("accepts only Rust Unicode White_Space around a complete Codex patch", async () => {
     const { extractAffectedPatchPaths } = await import("../src/hooks/provider-boundary.ts");
     const root = projectRoot();

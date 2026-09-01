@@ -294,6 +294,81 @@ describe("provider Bash boundary", () => {
     }
   });
 
+  test("compiled Codex Update context and terminal EOF forms reach existing pre-write and post-write effects", () => {
+    const forms = [
+      [
+        "*** Begin Patch",
+        "*** Update File: src/a.ts",
+        "@@",
+        "+// patch-signature",
+        "",
+        "+// after-empty-context",
+        "*** End Patch",
+      ].join("\n"),
+      [
+        "*** Begin Patch",
+        "*** Update File: src/a.ts",
+        "@@",
+        "+// patch-signature",
+        "*** End of File",
+        "",
+        "*** End Patch",
+      ].join("\n"),
+    ];
+    for (const command of forms) {
+      const root = tmpProject();
+      try {
+        installHooks(root);
+        fs.mkdirSync(path.join(root, "src"), { recursive: true });
+        fs.writeFileSync(path.join(root, "src", "a.ts"), "export {};\n");
+        fs.writeFileSync(path.join(root, ".wolf", "cerebrum.md"), "## Do-Not-Repeat\n\n- never use `patch-signature`\n");
+        const env = { ...process.env, CODEX_PROJECT_ROOT: root };
+        const pre = spawnSync(process.execPath, [path.join(root, ".wolf", "hooks", "pre-write.js")], {
+          input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "apply_patch", session_id: "current-patch", tool_input: { command } }),
+          encoding: "utf-8", env,
+        });
+        assert.strictEqual(pre.status, 0, pre.stderr);
+        assert.match(JSON.parse(pre.stdout).hookSpecificOutput.additionalContext, /patch-signature/);
+        const post = spawnSync(process.execPath, [path.join(root, ".wolf", "hooks", "post-write.js")], {
+          input: JSON.stringify({ hook_event_name: "PostToolUse", tool_name: "apply_patch", session_id: "current-patch", tool_input: { command } }),
+          encoding: "utf-8", env,
+        });
+        assert.strictEqual(post.status, 0, post.stderr);
+        const session = JSON.parse(fs.readFileSync(path.join(root, ".wolf", "hooks", "sessions", "current-patch.json"), "utf-8"));
+        assert.deepStrictEqual(session.files_written.map((entry: { file: string }) => entry.file), ["src/a.ts"]);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("compiled Codex bodyless Update-plus-Move remains effect-free", () => {
+    const root = tmpProject();
+    const command = [
+      "*** Begin Patch",
+      "*** Update File: src/a.ts",
+      "*** Move to: src/b.ts",
+      "*** End Patch",
+    ].join("\n");
+    try {
+      installHooks(root);
+      const env = { ...process.env, CODEX_PROJECT_ROOT: root };
+      for (const [event, script] of [["PreToolUse", "pre-write.js"], ["PostToolUse", "post-write.js"]] as const) {
+        const result = spawnSync(process.execPath, [path.join(root, ".wolf", "hooks", script)], {
+          input: JSON.stringify({ hook_event_name: event, tool_name: "apply_patch", session_id: "bodyless-move", tool_input: { command } }),
+          encoding: "utf-8", env,
+        });
+        assert.strictEqual(result.status, 0, result.stderr);
+        assert.strictEqual(result.stdout, "");
+      }
+      assert.ok(!fs.existsSync(path.join(root, ".wolf", "anatomy.md")));
+      assert.ok(!fs.existsSync(path.join(root, ".wolf", "memory.md")));
+      assert.ok(!fs.existsSync(path.join(root, ".wolf", "hooks", "sessions", "bodyless-move.json")));
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("installs one Codex Bash PostToolUse hook", async () => {
     const adapter = await codexAdapter();
     const root = tmpProject();
