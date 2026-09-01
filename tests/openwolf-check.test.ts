@@ -57,7 +57,7 @@ function run(root: string, json = true, selfcheck = false) {
 }
 
 const codexHookRecords = [
-  { event: "SessionStart", matcher: "startup|resume|clear", script: "session-start.js" },
+  { event: "SessionStart", matcher: "startup|resume|clear|compact", script: "session-start.js" },
   { event: "PreToolUse", matcher: "Read", script: "pre-read.js" },
   { event: "PreToolUse", matcher: "Edit|Write|MultiEdit|apply_patch", script: "pre-write.js" },
   { event: "PreToolUse", matcher: "Bash", script: "pre-bash.js" },
