@@ -125,20 +125,37 @@ function latestObservation(current, next) {
   return next.status === "failed" ? next : current;
 }
 
+function receiptStatus(evidence, provider) {
+  if (!evidence || typeof evidence !== "object" || Array.isArray(evidence)) return null;
+  const whole = (value) => Number.isSafeInteger(value) && value >= 0;
+  const counters = ["hooks_fired", "hooks_failed", "injections_delivered", "injection_tokens_delivered"];
+  if (!counters.every((key) => whole(evidence[key])) ||
+    evidence.hooks_fired === 0 || evidence.hooks_failed > evidence.hooks_fired ||
+    evidence.injections_delivered > evidence.hooks_fired ||
+    !evidence.per_hook || typeof evidence.per_hook !== "object" || Array.isArray(evidence.per_hook)) return null;
+  if (!Object.values(evidence.per_hook).every((entry) => entry && typeof entry === "object" &&
+    whole(entry.fired) && whole(entry.failed) && whole(entry.last_exit) && entry.failed <= entry.fired)) return null;
+
+  const hasProvider = "provider" in evidence;
+  const hasStatus = "status" in evidence;
+  const hasVariant = "variant" in evidence;
+  if (!hasProvider && !hasStatus && !hasVariant) {
+    return provider === "claude" ? (evidence.hooks_failed > 0 ? "failed" : "confirmed") : null;
+  }
+  if (provider !== "claude" || evidence.provider !== "claude" || evidence.variant !== "claude_attachment" ||
+    (evidence.status !== "confirmed" && evidence.status !== "failed")) return null;
+  if ((evidence.status === "confirmed" && evidence.hooks_failed !== 0) ||
+    (evidence.status === "failed" && evidence.hooks_failed === 0)) return null;
+  return evidence.status;
+}
+
 function receipt(provider, ledger) {
   let latest = null;
   for (const session of ledger?.sessions ?? []) {
     const evidence = session?.verified;
-    if (!evidence || typeof evidence !== "object") continue;
-    const evidenceProvider = evidence.provider ?? "claude";
-    if (evidenceProvider !== provider) continue;
     const at = observedAt(session.ended);
     if (at === null) continue;
-    const status = evidence.status === "failed" || (!evidence.status && evidence.hooks_failed > 0)
-      ? "failed"
-      : evidence.status === "confirmed" || (!evidence.status && evidence.hooks_fired > 0)
-        ? "confirmed"
-        : null;
+    const status = receiptStatus(evidence, provider);
     if (status) latest = latestObservation(latest, { status, at });
   }
   return latest;
