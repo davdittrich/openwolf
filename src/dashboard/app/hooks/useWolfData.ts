@@ -2,6 +2,10 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { dashboardFetch, WolfClient } from "../lib/wolf-client.js";
 import { parseAnatomy, parseMemory, parseCerebrum } from "../lib/file-parsers.js";
 import type { AnatomyEntry, MemorySession, CerebrumData } from "../lib/file-parsers.js";
+import { summarizeVerifiedDelivery as summarizeStoredDelivery } from "../../../hooks/ledger-math.js";
+import type { StoredDeliveryEvidence } from "../../../hooks/ledger-math.js";
+
+export { summarizeStoredDelivery as summarizeVerifiedDelivery };
 
 export interface RealUsage {
   input_tokens: number;
@@ -25,13 +29,8 @@ export interface LedgerSession {
     anatomy_lookups: number;
   };
   real_usage?: RealUsage;
-  /** Transcript-verified hook activity; absent = estimates only. */
-  verified?: {
-    hooks_fired: number;
-    hooks_failed: number;
-    injections_delivered: number;
-    injection_tokens_delivered: number;
-  };
+  /** Provider receipt evidence; absent = estimates only. */
+  verified?: StoredDeliveryEvidence;
 }
 
 interface TokenLedger {

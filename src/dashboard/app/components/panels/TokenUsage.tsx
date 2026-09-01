@@ -4,7 +4,7 @@ import { formatTokens } from "../../lib/utils.js";
 import { StatTile } from "../shared/StatTile.js";
 import { costOfProject, formatUsd, CACHE_READ_MULTIPLIER } from "../../lib/pricing.js";
 import type { ModelUsage } from "../../lib/pricing.js";
-import type { WolfData, LedgerSession } from "../../hooks/useWolfData.js";
+import { summarizeVerifiedDelivery, type WolfData, type LedgerSession } from "../../hooks/useWolfData.js";
 
 function fmt(n: number | undefined): string {
   return (n ?? 0).toLocaleString("en-US");
@@ -383,15 +383,17 @@ export function TokenUsage({ data }: { data: WolfData }) {
           estimated = char-ratio heuristic · measured = summed from harness transcripts at session end
         </p>
         {(() => {
-          const withVerified = tokenLedger.sessions.filter((s) => s.verified);
+          const withVerified = tokenLedger.sessions
+            .map((s) => summarizeVerifiedDelivery(s.verified))
+            .filter((evidence): evidence is NonNullable<typeof evidence> => evidence !== null);
           if (withVerified.length === 0) return null;
-          const fired = withVerified.reduce((n, s) => n + (s.verified!.hooks_fired ?? 0), 0);
-          const failed = withVerified.reduce((n, s) => n + (s.verified!.hooks_failed ?? 0), 0);
-          const delivered = withVerified.reduce((n, s) => n + (s.verified!.injections_delivered ?? 0), 0);
-          const deliveredTok = withVerified.reduce((n, s) => n + (s.verified!.injection_tokens_delivered ?? 0), 0);
+          const fired = withVerified.reduce((n, evidence) => n + evidence.hooks_fired, 0);
+          const failed = withVerified.reduce((n, evidence) => n + evidence.hooks_failed, 0);
+          const delivered = withVerified.reduce((n, evidence) => n + evidence.injections_delivered, 0);
+          const deliveredTok = withVerified.reduce((n, evidence) => n + evidence.injection_tokens_delivered, 0);
           return (
             <p className="wd-label mt-1" style={{ color: failed > 0 ? "var(--accent)" : "var(--text-faint)" }}>
-              verified from transcripts ({withVerified.length} sessions): {fmt(fired)} hook runs · {fmt(failed)} failures · {fmt(delivered)} injections ({formatTokens(deliveredTok)}) actually entered context
+              provider-receipt evidence ({withVerified.length} sessions): {fmt(fired)} hook runs · {fmt(failed)} failures · {fmt(delivered)} injections ({formatTokens(deliveredTok)}) actually entered context
             </p>
           );
         })()}

@@ -69,6 +69,30 @@ export type ProviderDeliveryEvidence =
 
 export type StoredDeliveryEvidence = LegacyDeliveryEvidence | ProviderDeliveryEvidence;
 
+/** Return only receipt-confirmed evidence; unknown is intentionally excluded. */
+export function summarizeVerifiedDelivery(
+  evidence: StoredDeliveryEvidence | undefined,
+): LegacyDeliveryEvidence | null {
+  if (!evidence) return null;
+  if ("status" in evidence && evidence.status === "unknown") return null;
+  const {
+    hooks_fired,
+    hooks_failed,
+    injections_delivered,
+    injection_tokens_delivered,
+    per_hook,
+    last_failure,
+  } = evidence;
+  return {
+    hooks_fired,
+    hooks_failed,
+    injections_delivered,
+    injection_tokens_delivered,
+    per_hook,
+    ...(last_failure ? { last_failure } : {}),
+  };
+}
+
 /** Sum of two per-key maps, used for both family and per-model rollups. */
 export function foldMap<T extends object>(
   target: Record<string, T>,
