@@ -158,7 +158,7 @@ describe("Codex installed hook documentation (#18)", () => {
 
   test("README names the lifecycle surface buildCodexHooks installs", () => {
     for (const [event, matcher, script] of [
-      ["SessionStart", "startup|resume|clear", "session-start.js"],
+      ["SessionStart", "startup|resume|clear|compact", "session-start.js"],
       ["PreToolUse", "Read", "pre-read.js"],
       ["PreToolUse", "Edit|Write|MultiEdit|apply_patch", "pre-write.js"],
       ["PreToolUse", "Bash", "pre-bash.js"],
