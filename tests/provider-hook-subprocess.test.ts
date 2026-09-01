@@ -263,6 +263,37 @@ describe("provider Bash boundary", () => {
     }
   });
 
+  test("compiled Codex pre-write leaves malformed apply_patch operations outside policy", () => {
+    const root = tmpProject();
+    const command = [
+      "*** Begin Patch",
+      "*** Update File: src/a.ts",
+      "+// patch-signature",
+      "stray",
+      "*** End Patch",
+    ].join("\n");
+    try {
+      installHooks(root);
+      fs.writeFileSync(path.join(root, ".wolf", "cerebrum.md"), "## Do-Not-Repeat\n\n- never use `patch-signature`\n");
+      const result = spawnSync(process.execPath, [path.join(root, ".wolf", "hooks", "pre-write.js")], {
+        input: JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "apply_patch",
+          session_id: "malformed-patch-policy",
+          tool_input: { command },
+        }),
+        encoding: "utf-8",
+        env: { ...process.env, CODEX_PROJECT_ROOT: root },
+      });
+      assert.strictEqual(result.status, 0);
+      assert.strictEqual(result.stdout, "");
+      assert.strictEqual(result.stderr, "");
+      assert.ok(!fs.existsSync(path.join(root, ".wolf", "hooks", "sessions", "malformed-patch-policy.json")));
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("installs one Codex Bash PostToolUse hook", async () => {
     const adapter = await codexAdapter();
     const root = tmpProject();

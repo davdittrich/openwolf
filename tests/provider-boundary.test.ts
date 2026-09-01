@@ -185,6 +185,41 @@ describe("provider hook boundary", () => {
     }
   });
 
+  test("requires complete Codex operations while accepting metadata and contained absolute paths", async () => {
+    const { extractAffectedPatchPaths } = await import("../src/hooks/provider-boundary.ts");
+    const root = projectRoot();
+    const absolute = path.join(root, "src", "updated.ts");
+    try {
+      assert.deepStrictEqual(
+        extractAffectedPatchPaths([
+          "*** Begin Patch",
+          "*** Environment ID: remote",
+          "*** Add File: src/added.ts",
+          "+created",
+          `*** Update File: ${absolute}`,
+          "*** Move to: src/moved.ts",
+          "@@",
+          "-old",
+          "+new",
+          "*** End of File",
+          "*** Delete File: src/deleted.ts",
+          "*** End Patch",
+        ].join("\n"), root, relativePath),
+        ["src/added.ts", "src/updated.ts", "src/moved.ts", "src/deleted.ts"],
+      );
+      for (const command of [
+        "*** Begin Patch\n*** Environment ID: \n*** Add File: src/a.ts\n+ok\n*** End Patch",
+        "*** Begin Patch\n*** Environment ID: one\n*** Environment ID: two\n*** Add File: src/a.ts\n+ok\n*** End Patch",
+        "*** Begin Patch\n*** Update File: src/a.ts\n@@\n+ok\n*** End of File\n+late\n*** End Patch",
+        "*** Begin Patch\n*** Update File: src/a.ts\nstray\n*** End Patch",
+      ]) {
+        assert.strictEqual(extractAffectedPatchPaths(command, root, relativePath), null, command);
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("accepts only Rust Unicode White_Space around a complete Codex patch", async () => {
     const { extractAffectedPatchPaths } = await import("../src/hooks/provider-boundary.ts");
     const root = projectRoot();
@@ -222,6 +257,7 @@ describe("provider hook boundary", () => {
       "*** Begin Patch\n*** Rename File: src/a.ts\n*** End Patch",
       "*** Begin Patch\n*** End Patch",
       "*** Begin Patch\n*** Update File: src/a.ts",
+      "*** Begin Patch\n*** Update File: src/a.ts\nstray\n*** End Patch",
     ]) {
       const root = projectRoot();
       try {
