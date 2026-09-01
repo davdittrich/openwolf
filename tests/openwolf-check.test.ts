@@ -71,6 +71,20 @@ function codexConfig(
   );
 }
 
+function selfcheckHooks(root: string, options: { omit?: string; fail?: string } = {}): string {
+  const hooks = path.join(root, ".wolf", "hooks");
+  const calls = path.join(root, "selfcheck-calls.txt");
+  fs.mkdirSync(hooks, { recursive: true });
+  codexHookScripts.filter((script) => script !== options.omit).forEach((script) => {
+    fs.writeFileSync(path.join(hooks, script), [
+      'const fs = require("node:fs");',
+      `fs.appendFileSync(${JSON.stringify(calls)}, ${JSON.stringify(`${script}\n`)});`,
+      options.fail === script ? 'console.error("secret=/outside/project"); process.exit(1);' : "process.exit(0);",
+    ].join("\n"), "utf-8");
+  });
+  return calls;
+}
+
 function receipts(root: string, entries: Array<{
   ended?: string;
   status?: unknown;
@@ -172,24 +186,28 @@ describe("openwolf-check provider evidence", () => {
     });
   });
 
-  test("configured-only Codex remains unknown in JSON and human output", () => {
+  test("a configured Codex surface with no hook files fails selfcheck", () => {
     project(codexConfig, (root) => {
       const json = run(root);
-      assert.deepStrictEqual(json.providers.codex, { configured: true, self_tested: false, receipt: "unknown", health: "unknown" });
-      assert.match(run(root, false), /codex.*configured.*unknown/i);
+      assert.deepStrictEqual(json.providers.codex, { configured: true, self_tested: false, receipt: "unknown", health: "failed", diagnostic: "Codex hook selfcheck failed" });
+      assert.match(run(root, false), /codex.*configured.*failed/i);
     });
   });
 
-  test("a successful installed selfcheck is self-tested, not active", () => {
+  test("a successful Codex selfcheck invokes every canonical script and no user hook", () => {
     project((dir) => {
-      codexConfig(dir);
-      const hooks = path.join(dir, ".wolf", "hooks");
-      fs.mkdirSync(hooks, { recursive: true });
-      fs.writeFileSync(path.join(hooks, "session-start.js"), "process.exit(0);", "utf-8");
+      const userHookMarker = path.join(dir, "user-hook-marker.txt");
+      const hooks = codexHooks(dir);
+      hooks.hooks.Stop.push({ matcher: "UserTool", hooks: [{ type: "command", command: `node \"${path.join(dir, "user-hook.js")}\"` }] });
+      codexConfig(dir, { hooks });
+      fs.writeFileSync(path.join(dir, "user-hook.js"), `require("node:fs").writeFileSync(${JSON.stringify(userHookMarker)}, "ran");`, "utf-8");
+      selfcheckHooks(dir);
     }, (root) => {
       const providers = run(root).providers;
       assert.deepStrictEqual(providers.codex, { configured: true, self_tested: true, receipt: "unknown", health: "self-tested" });
       assert.deepStrictEqual(providers.claude, { configured: false, self_tested: false, receipt: "unknown", health: "unknown" });
+      assert.deepStrictEqual(fs.readFileSync(path.join(root, "selfcheck-calls.txt"), "utf-8").trim().split("\n"), codexHookScripts);
+      assert.strictEqual(fs.existsSync(path.join(root, "user-hook-marker.txt")), false);
     });
   });
 
@@ -197,18 +215,14 @@ describe("openwolf-check provider evidence", () => {
     const active = project((dir) => {
       codexConfig(dir);
       receipts(dir, [{ ended: "2000-01-01T00:00:00Z", status: "confirmed", provider: "codex" }]);
-      const hooks = path.join(dir, ".wolf", "hooks");
-      fs.mkdirSync(hooks, { recursive: true });
-      fs.writeFileSync(path.join(hooks, "session-start.js"), "process.exit(0);", "utf-8");
+      selfcheckHooks(dir);
     }, run).providers.codex;
     assert.deepStrictEqual(active, { configured: true, self_tested: true, receipt: "unknown", health: "self-tested" });
 
     const selfcheckFailure = project((dir) => {
       codexConfig(dir);
       receipts(dir, [{ ended: "2000-01-01T00:00:00Z", status: "confirmed", provider: "codex" }]);
-      const hooks = path.join(dir, ".wolf", "hooks");
-      fs.mkdirSync(hooks, { recursive: true });
-      fs.writeFileSync(path.join(hooks, "session-start.js"), "process.exit(1);", "utf-8");
+      selfcheckHooks(dir, { fail: "post-bash.js" });
     }, run).providers.codex;
     assert.strictEqual(selfcheckFailure.health, "failed", "a selfcheck failure remains independently authoritative");
 
@@ -331,9 +345,7 @@ describe("openwolf-check provider evidence", () => {
     const selfTested = project((dir) => {
       codexConfig(dir);
       receipts(dir, [{ ended: "2000-01-01T00:00:00Z", status: "failed", provider: "codex" }]);
-      const hooks = path.join(dir, ".wolf", "hooks");
-      fs.mkdirSync(hooks, { recursive: true });
-      fs.writeFileSync(path.join(hooks, "session-start.js"), "process.exit(0);", "utf-8");
+      selfcheckHooks(dir);
     }, run);
     assert.strictEqual(selfTested.providers.codex.health, "self-tested");
 
@@ -358,13 +370,11 @@ describe("openwolf-check provider evidence", () => {
   test("failed selfcheck stays failed with a bounded non-sensitive diagnostic", () => {
     const evidence = project((dir) => {
       codexConfig(dir);
-      const hooks = path.join(dir, ".wolf", "hooks");
-      fs.mkdirSync(hooks, { recursive: true });
-      fs.writeFileSync(path.join(hooks, "session-start.js"), 'console.error("secret=/outside/project"); process.exit(1);', "utf-8");
+      selfcheckHooks(dir, { omit: "post-bash.js" });
     }, run).providers.codex;
     assert.strictEqual(evidence.health, "failed");
-    assert.strictEqual(evidence.diagnostic, "installed hook selfcheck failed");
-    assert.doesNotMatch(JSON.stringify(evidence), /secret|outside/);
+    assert.strictEqual(evidence.diagnostic, "Codex hook selfcheck failed");
+    assert.doesNotMatch(JSON.stringify(evidence), /post-bash|outside|\.wolf/);
   });
 });
 
