@@ -1,4 +1,11 @@
+import * as path from "node:path";
+
 export type CodexHooksFeatureState = "enabled" | "disabled" | "ambiguous";
+
+/** Render the provider command once so installation and inspection cannot drift. */
+export function renderCodexHookCommand(projectRoot: string, script: string): string {
+  return `node "${path.join(projectRoot, ".wolf", "hooks", script).replace(/\\/g, "/")}"`;
+}
 
 /** Read the effective [features] hooks fact without changing user-owned TOML. */
 export function parseCodexHooksFeature(config: string | null): CodexHooksFeatureState {

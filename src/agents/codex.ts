@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { parseCodexHooksFeature } from "./codex-config.js";
+import { parseCodexHooksFeature, renderCodexHookCommand } from "./codex-config.js";
 import { upsertMarkerBlock } from "./markers.js";
 import { readSnippet } from "./index.js";
 import type { AgentAdapter, AgentInstallContext, AgentInstallResult } from "./types.js";
@@ -15,7 +15,7 @@ import type { AgentAdapter, AgentInstallContext, AgentInstallResult } from "./ty
 function hookEntry(projectRoot: string, script: string, timeout: number, statusMessage: string) {
   return {
     type: "command",
-    command: `node "${path.join(projectRoot, ".wolf", "hooks", script)}"`,
+    command: renderCodexHookCommand(projectRoot, script),
     timeout,
     statusMessage,
   };

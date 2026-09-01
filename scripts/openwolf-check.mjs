@@ -10,7 +10,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { parseCodexHooksFeature } from "../dist/src/agents/codex-config.js";
+import { parseCodexHooksFeature, renderCodexHookCommand } from "../dist/src/agents/codex-config.js";
 import { spawnSync } from "node:child_process";
 
 const args = process.argv.slice(2);
@@ -104,12 +104,11 @@ function configuredCodex() {
 function hasGeneratedHookSurface(parsed, surface) {
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed) ||
     parsed.hooks === null || typeof parsed.hooks !== "object" || Array.isArray(parsed.hooks)) return false;
-  const projectRoot = root.replace(/\\/g, "/").replace(/\/+$/, "");
   return surface.every(([event, matcher, script]) =>
     Array.isArray(parsed.hooks[event]) && parsed.hooks[event].some((entry) =>
       entry && typeof entry === "object" && entry.matcher === matcher && Array.isArray(entry.hooks) &&
       entry.hooks.some((handler) => handler && typeof handler === "object" &&
-        handler.type === "command" && handler.command === `node "${projectRoot}/.wolf/hooks/${script}"`)));
+        handler.type === "command" && handler.command === renderCodexHookCommand(root, script))));
 }
 
 function selfcheck(hooks, diagnostic) {
