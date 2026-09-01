@@ -27,6 +27,18 @@ describe("summarizeVerifiedDelivery", () => {
     );
   });
 
+  test("rejects a forged Codex receipt that claims Claude attachment evidence", () => {
+    assert.strictEqual(
+      summarizeVerifiedDelivery({
+        ...counters,
+        provider: "codex",
+        status: "confirmed",
+        variant: "claude_attachment",
+      } as any),
+      null,
+    );
+  });
+
   test("excludes every unknown provider receipt instead of counting a zero", () => {
     assert.strictEqual(summarizeVerifiedDelivery({ provider: "codex", status: "unknown", variant: "unavailable" }), null);
     assert.strictEqual(summarizeVerifiedDelivery({ provider: "claude", status: "unknown", variant: "unavailable" }), null);
