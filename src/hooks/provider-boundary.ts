@@ -41,6 +41,10 @@ function claudeAuthority(event: Record<string, unknown>): SubagentAuthority {
   return typeof event.agent_id === "string" && event.agent_id.length > 0 ? true : "unknown";
 }
 
+function codexAuthority(event: Record<string, unknown>): SubagentAuthority {
+  return typeof event.agent_id === "string" && event.agent_id.trim().length > 0 ? true : "unknown";
+}
+
 function normalizePatchPath(rawPath: string, projectRoot: string, resolvePath: ProjectPathResolver): string | null {
   if (!rawPath || rawPath.includes("\0") || path.isAbsolute(rawPath)) return null;
   const parts = rawPath.replace(/\\/g, "/").split("/");
@@ -118,7 +122,7 @@ export function decodeProviderHook(
     toolName,
     sessionId: typeof event.session_id === "string" ? event.session_id : undefined,
     projectRoot,
-    isSubagent: provider === "claude" ? claudeAuthority(event) : "unknown" as const,
+    isSubagent: provider === "claude" ? claudeAuthority(event) : codexAuthority(event),
     variant: provider === "codex" && typeof event.turn_id === "string" ? { turnId: event.turn_id } : {},
   } as const;
 
