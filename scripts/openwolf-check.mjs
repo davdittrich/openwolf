@@ -10,6 +10,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { spawnSync } from "node:child_process";
 
 const args = process.argv.slice(2);
 const asJson = args.includes("--json");
@@ -58,6 +59,55 @@ report.agentsWired = Object.entries(agents).filter(([, v]) => v).map(([k]) => k)
 report.agentsInConfig = cfg?.openwolf?.agents ?? null;
 report.skills = ["security-audit", "reframe"].filter((s) => exists(path.join(root, ".claude", "commands", `${s}.md`)));
 
+function configuredClaude() {
+  const parsed = readJson(path.join(root, ".claude", "settings.json"));
+  return parsed !== null && typeof parsed === "object" && JSON.stringify(parsed).includes(".wolf/hooks/");
+}
+
+function configuredCodex() {
+  const parsed = readJson(path.join(root, ".codex", "hooks.json"));
+  return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) &&
+    parsed.hooks !== null && typeof parsed.hooks === "object" && !Array.isArray(parsed.hooks);
+}
+
+function selfcheck() {
+  const hook = hookFiles.includes("session-start.js") ? "session-start.js" : hookFiles[0];
+  if (!hook) return { ran: false, ok: false, diagnostic: null };
+  const result = spawnSync(process.execPath, [path.join(wolfDir, "hooks", hook), "--selfcheck"], {
+    cwd: root,
+    env: { ...process.env, OPENWOLF_PROJECT_ROOT: root },
+    encoding: "utf-8",
+    timeout: 5_000,
+  });
+  if (result.status === 0) return { ran: true, ok: true, diagnostic: null };
+  return { ran: true, ok: false, diagnostic: "installed hook selfcheck failed" };
+}
+
+function receipt(provider, ledger) {
+  let confirmed = false;
+  for (const session of ledger?.sessions ?? []) {
+    const evidence = session?.verified;
+    if (!evidence || typeof evidence !== "object") continue;
+    const evidenceProvider = evidence.provider ?? "claude";
+    if (evidenceProvider !== provider) continue;
+    if (evidence.status === "failed" || (!evidence.status && evidence.hooks_failed > 0)) return "failed";
+    if (evidence.status === "confirmed" || (!evidence.status && evidence.hooks_fired > 0)) confirmed = true;
+  }
+  return confirmed ? "confirmed" : "unknown";
+}
+
+function providerReport(provider, configured, selfTest, ledger) {
+  const receiptState = receipt(provider, ledger);
+  const failed = receiptState === "failed" || (selfTest.ran && !selfTest.ok);
+  return {
+    configured,
+    self_tested: selfTest.ran && selfTest.ok,
+    receipt: receiptState,
+    health: failed ? "failed" : receiptState === "confirmed" ? "active" : selfTest.ok ? "self-tested" : "unknown",
+    ...(failed ? { diagnostic: selfTest.diagnostic ?? "provider receipt failed" } : {}),
+  };
+}
+
 // ── Recency: newest activity across the state files ─────────────────────────
 const activityFiles = ["memory.md", "token-ledger.json", "buglog.json", "anatomy.md", "anatomy-index.json", path.join("hooks", "_session.json")];
 const newest = activityFiles
@@ -69,6 +119,11 @@ report.lastActivity = newest ? { file: newest.f, at: new Date(newest.t).toISOStr
 // ── What it did: ledger sessions ────────────────────────────────────────────
 const ledger = readJson(path.join(wolfDir, "token-ledger.json"));
 const lt = ledger?.lifetime ?? {};
+const selfTest = selfcheck();
+report.providers = {
+  claude: providerReport("claude", configuredClaude(), selfTest, ledger),
+  codex: providerReport("codex", configuredCodex(), selfTest, ledger),
+};
 report.lifetime = {
   sessions: lt.total_sessions ?? 0,
   reads: lt.total_reads ?? 0,
@@ -102,6 +157,9 @@ const line = (k, v) => console.log(`  ${k.padEnd(24)} ${v}`);
 console.log(`\n  openwolf-check — ${root}\n`);
 line("installed", `yes (hooks generation ${report.generation}, ${hookFiles.length} hook scripts)`);
 line("agents wired", report.agentsWired.length ? report.agentsWired.join(", ") : "none detected");
+for (const [provider, evidence] of Object.entries(report.providers)) {
+  line(`${provider} hook evidence`, `configured ${evidence.configured ? "yes" : "no"} · ${evidence.health}`);
+}
 if (report.agentsInConfig) line("agents in config", report.agentsInConfig.join(", "));
 line("bundled skills", report.skills.length ? report.skills.map((s) => `/${s}`).join(", ") : "none (pre-2.0 install)");
 line("last activity", report.lastActivity ? `${report.lastActivity.ago}  (${report.lastActivity.file})` : "never");
