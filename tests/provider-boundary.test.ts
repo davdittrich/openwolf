@@ -119,6 +119,42 @@ describe("provider hook boundary", () => {
     }
   });
 
+  test("keeps malformed Codex patches out of compiled post-write bookkeeping", () => {
+    assert.ok(fs.existsSync(path.join(DIST_HOOKS, "post-write.js")), "run pnpm build:hooks before this test");
+    for (const command of [
+      "*** Begin Patch\n*** Update File: src/a.ts\n*** Update File:\n*** End Patch",
+      "*** Begin Patch\n*** Update File: ../outside.ts\n*** End Patch",
+      "*** Begin Patch\n*** Rename File: src/a.ts\n*** End Patch",
+      "*** Begin Patch\n*** End Patch",
+      "*** Begin Patch\n*** Update File: src/a.ts",
+    ]) {
+      const root = projectRoot();
+      try {
+        installCompiledHooks(root);
+        const result = spawnSync(process.execPath, [path.join(root, ".wolf", "hooks", "post-write.js")], {
+          input: JSON.stringify({
+            hook_event_name: "PostToolUse",
+            tool_name: "apply_patch",
+            session_id: "malformed-patch",
+            tool_input: { command },
+          }),
+          encoding: "utf-8",
+          env: { ...process.env, CODEX_PROJECT_ROOT: root },
+        });
+        assert.strictEqual(result.status, 0, command);
+        assert.strictEqual(result.stdout, "", command);
+        assert.strictEqual(result.stderr, "", command);
+        const heartbeat = JSON.parse(fs.readFileSync(path.join(root, ".wolf", "hooks", "_heartbeat.json"), "utf-8"));
+        assert.ok(heartbeat["post-write"].last_ok, command);
+        assert.ok(!fs.existsSync(path.join(root, ".wolf", "anatomy.md")), command);
+        assert.ok(!fs.existsSync(path.join(root, ".wolf", "memory.md")), command);
+        assert.ok(!fs.existsSync(path.join(root, ".wolf", "hooks", "sessions", "malformed-patch.json")), command);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
   test("drives every accepted Codex patch path through the compiled post-write bookkeeping once", () => {
     assert.ok(fs.existsSync(path.join(DIST_HOOKS, "post-write.js")), "run pnpm build:hooks before this test");
     const root = projectRoot();

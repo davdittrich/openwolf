@@ -77,12 +77,17 @@ async function main(): Promise<void> {
   const sessionFile = getSessionFilePath(input);
 
   const provider = detectAgent();
-  const patchEvent = provider === "codex" && input.tool_name === "apply_patch"
-    ? decodeProviderHook("codex", raw, projectRoot, projectRelativePath)
-    : null;
-  const filePaths = patchEvent?.toolName === "apply_patch"
-    ? patchEvent.affectedPaths
-    : [input.tool_input?.file_path ?? input.tool_input?.path ?? ""];
+  if (provider === "codex" && input.tool_name === "apply_patch") {
+    const patchEvent = decodeProviderHook("codex", raw, projectRoot, projectRelativePath);
+    const filePaths = patchEvent?.toolName === "apply_patch" ? patchEvent.affectedPaths : null;
+    if (!filePaths || filePaths.length === 0) return;
+    for (const filePath of filePaths) {
+      recordPostWrite(input, filePath, wolfDir, projectRoot, sessionFile);
+    }
+    return;
+  }
+
+  const filePaths = [input.tool_input?.file_path ?? input.tool_input?.path ?? ""];
   if (!filePaths || filePaths.length === 0) return;
   for (const filePath of filePaths) {
     recordPostWrite(input, filePath, wolfDir, projectRoot, sessionFile);
