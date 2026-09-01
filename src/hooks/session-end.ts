@@ -1,7 +1,7 @@
 import * as path from "node:path";
-import { getWolfDir, ensureWolfDir, readJSON, appendMarkdown, timeShort, readStdin, hookMain, getSessionFilePath } from "./shared.js";
+import { getWolfDir, ensureWolfDir, readJSON, appendMarkdown, timeShort, readStdin, hookMain, getSessionFilePath, detectAgent } from "./shared.js";
 import { buildSessionEntry, flushSessionToLedger, type SessionData } from "./ledger.js";
-import { verifyHookDelivery } from "./hook-attachments.js";
+import { hookProviderFromAgent, verifyHookDelivery } from "./hook-attachments.js";
 
 // SessionEnd hook: final ledger flush + the single "Session end" line in
 // memory.md. Fires on clear/logout/exit (not on SIGKILL — the per-turn Stop
@@ -31,10 +31,10 @@ async function main(): Promise<void> {
   }
 
   const entry = buildSessionEntry(session, hookInput.transcript_path);
-  if (hookInput.transcript_path) {
-    const verified = verifyHookDelivery(hookInput.transcript_path);
-    if (verified) entry.verified = verified;
-  }
+  entry.verified = verifyHookDelivery(
+    hookProviderFromAgent(detectAgent()),
+    hookInput.transcript_path ?? "",
+  );
   flushSessionToLedger(wolfDir, entry);
 
   if (writeCount > 0) {

@@ -3,8 +3,9 @@ import * as assert from "node:assert";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { spawnSync } from "node:child_process";
 
-import { verifyHookDelivery } from "../src/hooks/hook-attachments.ts";
+import { hookProviderFromAgent, verifyHookDelivery } from "../src/hooks/hook-attachments.ts";
 import { readUsageSequence, attributeCacheRebuilds } from "../src/tracker/cache-attribution.ts";
 import { positionWeightedCostUsd } from "../src/hooks/ledger-math.ts";
 
@@ -31,6 +32,32 @@ function hookLine(opts: { hookName: string; command: string; exitCode: number; s
   };
 }
 
+function runTerminalHook(hook: "stop" | "session-end", env: Record<string, string>): any {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), "wolf-terminal-"));
+  const wolfDir = path.join(project, ".wolf");
+  const hooksDir = path.join(wolfDir, "hooks");
+  fs.mkdirSync(path.join(hooksDir, "sessions"), { recursive: true });
+  fs.cpSync(path.join(import.meta.dirname, "..", "dist", "hooks"), hooksDir, { recursive: true });
+  fs.writeFileSync(path.join(hooksDir, "sessions", "session-1.json"), JSON.stringify({
+    session_id: "session-1",
+    started: "2026-09-01T00:00:00Z",
+    files_read: { "src/a.ts": { tokens: 1, count: 1 } },
+    files_written: [], edit_counts: {}, anatomy_hits: 0, anatomy_misses: 0,
+    repeated_reads_warned: 0, stop_count: 0, reminders_sent: {},
+  }), "utf-8");
+  const transcript = writeTranscript([
+    hookLine({ hookName: "SessionStart:startup", command: 'node "$CLAUDE_PROJECT_DIR/.wolf/hooks/session-start.js"', exitCode: 0 }),
+  ]);
+  const run = spawnSync(process.execPath, [path.join(hooksDir, `${hook}.js`)], {
+    cwd: project,
+    env: { ...process.env, OPENWOLF_PROJECT_ROOT: project, ...env },
+    input: JSON.stringify({ session_id: "session-1", transcript_path: transcript }),
+    encoding: "utf-8",
+  });
+  assert.strictEqual(run.status, 0, run.stderr);
+  return JSON.parse(fs.readFileSync(path.join(wolfDir, "token-ledger.json"), "utf-8")).sessions[0].verified;
+}
+
 describe("verifyHookDelivery", () => {
   test("counts fired/failed/delivered for OpenWolf hooks only", () => {
     const inject = JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: "x".repeat(400) } });
@@ -55,6 +82,55 @@ describe("verifyHookDelivery", () => {
     const p = writeTranscript([{ totally: "different" }, { schema: "now" }, { no: "type field" }]);
     assert.strictEqual(verifyHookDelivery(p), null);
     assert.strictEqual(verifyHookDelivery("/nonexistent/path.jsonl"), null);
+  });
+
+  test("returns provider-primary confirmed and failed Claude receipt evidence", () => {
+    const confirmed = writeTranscript([
+      hookLine({ hookName: "SessionStart:startup", command: 'node "$CLAUDE_PROJECT_DIR/.wolf/hooks/session-start.js"', exitCode: 0 }),
+    ]);
+    const failed = writeTranscript([
+      hookLine({ hookName: "PostToolUse:Write", command: 'node "$CLAUDE_PROJECT_DIR/.wolf/hooks/post-write.js"', exitCode: 1, stderr: "x".repeat(300) }),
+    ]);
+
+    assert.deepStrictEqual(verifyHookDelivery("claude", confirmed), {
+      provider: "claude",
+      status: "confirmed",
+      variant: "claude_attachment",
+      hooks_fired: 1,
+      hooks_failed: 0,
+      injections_delivered: 0,
+      injection_tokens_delivered: 0,
+      per_hook: { "session-start.js": { fired: 1, failed: 0, last_exit: 0 } },
+    });
+    const evidence = verifyHookDelivery("claude", failed);
+    assert.strictEqual(evidence.provider, "claude");
+    assert.strictEqual(evidence.status, "failed");
+    assert.strictEqual(evidence.variant, "claude_attachment");
+    assert.strictEqual(evidence.last_failure?.stderr_head.length, 200);
+  });
+
+  test("keeps unsupported, absent, and schema-drifted provider authority unknown", () => {
+    const drifted = writeTranscript([{ unsupported: true }]);
+    assert.deepStrictEqual(verifyHookDelivery("codex", drifted), {
+      provider: "codex",
+      status: "unknown",
+      variant: "unavailable",
+    });
+    assert.deepStrictEqual(verifyHookDelivery("claude", drifted), {
+      provider: "claude",
+      status: "unknown",
+      variant: "unavailable",
+    });
+    assert.strictEqual(hookProviderFromAgent("claude"), "claude");
+    assert.strictEqual(hookProviderFromAgent("codex"), "codex");
+    assert.strictEqual(hookProviderFromAgent("opencode"), "unknown");
+    assert.strictEqual(hookProviderFromAgent("future-agent"), "unknown");
+  });
+
+  test("terminal hooks derive provider evidence from detectAgent", () => {
+    assert.strictEqual(runTerminalHook("stop", { CLAUDECODE: "1" }).provider, "claude");
+    assert.strictEqual(runTerminalHook("session-end", { CODEX_SANDBOX: "1" }).provider, "codex");
+    assert.strictEqual(runTerminalHook("stop", {}).provider, "unknown");
   });
 });
 

@@ -1,4 +1,5 @@
 import type { RealUsage } from "./shared.js";
+import type { HookProvider } from "./provider-boundary.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Pure token-ledger math: types, folds, lifetime derivation, migrations.
@@ -42,6 +43,31 @@ export interface FamilyTotals {
   original_tokens: number;
   entered_tokens: number;
 }
+
+/** Historical Claude receipt shape retained for already-persisted ledgers. */
+export interface LegacyDeliveryEvidence {
+  hooks_fired: number;
+  hooks_failed: number;
+  injections_delivered: number;
+  injection_tokens_delivered: number;
+  per_hook: Record<string, { fired: number; failed: number; last_exit: number }>;
+  last_failure?: { hook: string; stderr_head: string };
+}
+
+/** New writes carry the provider and the authority of the receipt explicitly. */
+export type ProviderDeliveryEvidence =
+  | (LegacyDeliveryEvidence & {
+      provider: "claude";
+      status: "confirmed" | "failed";
+      variant: "claude_attachment";
+    })
+  | {
+      provider: HookProvider;
+      status: "unknown";
+      variant: "unavailable";
+    };
+
+export type StoredDeliveryEvidence = LegacyDeliveryEvidence | ProviderDeliveryEvidence;
 
 /** Sum of two per-key maps, used for both family and per-model rollups. */
 export function foldMap<T extends object>(
@@ -98,14 +124,7 @@ export interface SessionEntry {
   /** Transcript-verified hook activity (2.2). Absent = verification
    * unavailable (old transcript, format drift, or non-Claude agent); the
    * self-reported totals are then estimates, not facts. */
-  verified?: {
-    hooks_fired: number;
-    hooks_failed: number;
-    injections_delivered: number;
-    injection_tokens_delivered: number;
-    per_hook: Record<string, { fired: number; failed: number; last_exit: number }>;
-    last_failure?: { hook: string; stderr_head: string };
-  };
+  verified?: StoredDeliveryEvidence;
 }
 
 export interface LifetimeTotals {

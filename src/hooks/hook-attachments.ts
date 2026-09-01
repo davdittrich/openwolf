@@ -1,4 +1,8 @@
 import * as fs from "node:fs";
+import type { HookProvider } from "./provider-boundary.js";
+import type { LegacyDeliveryEvidence, ProviderDeliveryEvidence } from "./ledger-math.js";
+
+export type { ProviderDeliveryEvidence } from "./ledger-math.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Hook delivery verification (2.2). Claude Code writes every hook invocation
@@ -18,18 +22,17 @@ import * as fs from "node:fs";
 // from source in tests.
 // ─────────────────────────────────────────────────────────────────────────────
 
-export interface HookVerification {
+export interface HookVerification extends LegacyDeliveryEvidence {
   /** OpenWolf hook invocations recorded by the harness. */
-  hooks_fired: number;
-  /** Of those, how many exited nonzero (crashes the old design swallowed). */
-  hooks_failed: number;
-  /** additionalContext payloads from our hooks that entered the conversation. */
-  injections_delivered: number;
-  /** Estimated tokens of delivered injections (chars/4). */
-  injection_tokens_delivered: number;
-  per_hook: Record<string, { fired: number; failed: number; last_exit: number }>;
-  /** Most recent failure detail, for surfacing. */
-  last_failure?: { hook: string; stderr_head: string };
+}
+
+/** Map the existing shared attribution labels into the hook transport contract. */
+export function hookProviderFromAgent(agent: string): HookProvider {
+  return agent === "claude" || agent === "codex" ? agent : "unknown";
+}
+
+function unavailable(provider: HookProvider): ProviderDeliveryEvidence {
+  return { provider, status: "unknown", variant: "unavailable" };
 }
 
 interface AttachmentRecord {
@@ -57,7 +60,25 @@ function hookFileOf(command: string): string {
  * when the transcript is unreadable or the line format fails the schema
  * probe — callers must then present self-reported numbers as estimates.
  */
-export function verifyHookDelivery(transcriptPath: string): HookVerification | null {
+export function verifyHookDelivery(transcriptPath: string): HookVerification | null;
+export function verifyHookDelivery(provider: HookProvider, transcriptPath: string): ProviderDeliveryEvidence;
+export function verifyHookDelivery(providerOrTranscriptPath: string, transcriptPath?: string): HookVerification | ProviderDeliveryEvidence | null {
+  if (transcriptPath === undefined) return readHookDelivery(providerOrTranscriptPath);
+  const provider = providerOrTranscriptPath as HookProvider;
+  // Codex documents hook transport, not a stable receipt artifact. Never parse
+  // Claude's private transcript shape for it.
+  if (provider !== "claude") return unavailable(provider);
+  const verified = readHookDelivery(transcriptPath);
+  if (!verified || verified.hooks_fired === 0) return unavailable(provider);
+  return {
+    ...verified,
+    provider,
+    status: verified.hooks_failed > 0 ? "failed" : "confirmed",
+    variant: "claude_attachment",
+  };
+}
+
+function readHookDelivery(transcriptPath: string): HookVerification | null {
   let raw: string;
   try {
     raw = fs.readFileSync(transcriptPath, "utf-8");

@@ -1,8 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { getWolfDir, ensureWolfDir, readJSON, writeJSON, countSemanticEntries, readStdin, hookMain, getSessionFilePath } from "./shared.js";
+import { getWolfDir, ensureWolfDir, readJSON, writeJSON, countSemanticEntries, readStdin, hookMain, getSessionFilePath, detectAgent } from "./shared.js";
 import { buildSessionEntry, flushSessionToLedger, type SessionData } from "./ledger.js";
-import { verifyHookDelivery } from "./hook-attachments.js";
+import { hookProviderFromAgent, verifyHookDelivery } from "./hook-attachments.js";
 import { mutateJSON, HOOK_LOCK_BUDGET_MS } from "./anatomy-lock.js";
 
 async function main(): Promise<void> {
@@ -80,10 +80,10 @@ async function main(): Promise<void> {
   // Verified delivery (2.2): the transcript records every hook invocation as
   // an attachment line; that is ground truth for what fired, failed, and what
   // context actually reached the model — self-reported counters are estimates.
-  if (hookInput.transcript_path) {
-    const verified = verifyHookDelivery(hookInput.transcript_path);
-    if (verified) entry.verified = verified;
-  }
+  entry.verified = verifyHookDelivery(
+    hookProviderFromAgent(detectAgent()),
+    hookInput.transcript_path ?? "",
+  );
 
   flushSessionToLedger(wolfDir, entry);
 }
