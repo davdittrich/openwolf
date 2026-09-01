@@ -15,7 +15,6 @@ import * as path from "node:path";
 // index.js for readSnippet(), so entering the cycle at codex.js hits the
 // adapter registry before it is initialized.
 const DIST_AGENTS = path.resolve(import.meta.dirname ?? ".", "..", "dist", "src", "agents", "index.js");
-const haveDist = fs.existsSync(DIST_AGENTS);
 
 async function loadCodexAdapter(): Promise<{ install: (ctx: unknown) => { actions: string[]; warnings: string[] } }> {
   const { resolveAgents } = await import(DIST_AGENTS);
@@ -32,7 +31,11 @@ function project(): { projectRoot: string; wolfDir: string; templatesDir: string
   return { projectRoot, wolfDir, templatesDir };
 }
 
-describe("codex adapter hooks.json", { skip: !haveDist ? "dist not built" : false }, () => {
+describe("codex adapter hooks.json", () => {
+  test("runs against the build produced by pnpm test", () => {
+    assert.ok(fs.existsSync(DIST_AGENTS), "pnpm test must build dist before importing the Codex adapter");
+  });
+
   test("a malformed existing hooks.json is left byte-identical and warned about", async () => {
     const codexAdapter = await loadCodexAdapter();
     const ctx = project();
