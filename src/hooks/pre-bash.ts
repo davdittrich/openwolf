@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import { getWolfDir, ensureWolfDir, readJSON, readStdin, recordInjection, hookMain, getSessionFilePath, getProjectDir, detectAgent } from "./shared.js";
 import { mutateJSON, HOOK_LOCK_BUDGET_MS } from "./anatomy-lock.js";
 import { shouldSuggestFilter } from "./bash-filter.js";
@@ -24,6 +25,11 @@ import { decodeProviderHook, encodeProviderResponse, type HookProvider } from ".
 // ─────────────────────────────────────────────────────────────────────────────
 
 type FilterMode = "suggest" | "rewrite" | "off";
+type PreBashDependencies = {
+  decodeProviderHook: typeof decodeProviderHook;
+  shouldSuggestFilter: typeof shouldSuggestFilter;
+  encodeProviderResponse: typeof encodeProviderResponse;
+};
 
 function hookProvider(): HookProvider {
   const agent = detectAgent();
@@ -38,19 +44,21 @@ function filterMode(wolfDir: string): FilterMode {
   return mode === "off" || mode === "rewrite" ? mode : "suggest";
 }
 
-async function main(): Promise<void> {
-  ensureWolfDir();
-  const wolfDir = getWolfDir();
-  const mode = filterMode(wolfDir);
-  if (mode === "off") { return; }
-
-  const raw = await readStdin();
-  const event = decodeProviderHook(hookProvider(), raw, getProjectDir());
-  if (!event || !shouldSuggestFilter(event.command)) return;
+export function runPreBash(
+  raw: string,
+  provider: HookProvider,
+  projectRoot: string,
+  wolfDir: string,
+  mode: FilterMode,
+  dependencies: PreBashDependencies = { decodeProviderHook, shouldSuggestFilter, encodeProviderResponse },
+): string {
+  if (mode === "off") return "";
+  const event = dependencies.decodeProviderHook(provider, raw, projectRoot);
+  if (!event || !dependencies.shouldSuggestFilter(event.command)) return "";
 
   const command = event.command;
 
-  const sessionFile = getSessionFilePath({ session_id: event.sessionId });
+  const sessionFile = getSessionFilePath({ session_id: event.sessionId }, wolfDir);
   // Once per session per command family: nagging every test run costs more
   // context than it saves.
   const family = command.trim().split(/\s+/).slice(0, 2).join(" ");
@@ -75,7 +83,16 @@ async function main(): Promise<void> {
     },
   );
 
-  if (emit) process.stdout.write(encodeProviderResponse(event.provider, { kind: "advisory", text: note }));
+  return emit ? dependencies.encodeProviderResponse(event.provider, { kind: "advisory", text: note }) : "";
 }
 
-hookMain("pre-bash", main);
+async function main(): Promise<void> {
+  ensureWolfDir();
+  const wolfDir = getWolfDir();
+  const mode = filterMode(wolfDir);
+  if (mode === "off") return;
+  const output = runPreBash(await readStdin(), hookProvider(), getProjectDir(), wolfDir, mode);
+  if (output) process.stdout.write(output);
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) hookMain("pre-bash", main);

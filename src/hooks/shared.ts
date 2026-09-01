@@ -125,8 +125,8 @@ export function hookMain(hookName: string, fn: () => void | Promise<void>): void
 // harness-provided session_id when present.
 
 /** Resolve the session state file for this hook invocation. */
-export function getSessionFilePath(hookInput: { session_id?: string } | undefined): string {
-  const hooksDir = path.join(getWolfDir(), "hooks");
+export function getSessionFilePath(hookInput: { session_id?: string } | undefined, wolfDir = getWolfDir()): string {
+  const hooksDir = path.join(wolfDir, "hooks");
   const id = hookInput?.session_id;
   if (typeof id === "string" && /^[\w.-]{4,128}$/.test(id)) {
     return path.join(hooksDir, "sessions", `${id}.json`);
