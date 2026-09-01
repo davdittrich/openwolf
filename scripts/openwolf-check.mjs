@@ -119,10 +119,14 @@ report.lastActivity = newest ? { file: newest.f, at: new Date(newest.t).toISOStr
 // ── What it did: ledger sessions ────────────────────────────────────────────
 const ledger = readJson(path.join(wolfDir, "token-ledger.json"));
 const lt = ledger?.lifetime ?? {};
-const selfTest = selfcheck();
+const claudeConfigured = configuredClaude();
+const codexConfigured = configuredCodex();
+const installedSelfTest = claudeConfigured || codexConfigured
+  ? selfcheck()
+  : { ran: false, ok: false, diagnostic: null };
 report.providers = {
-  claude: providerReport("claude", configuredClaude(), selfTest, ledger),
-  codex: providerReport("codex", configuredCodex(), selfTest, ledger),
+  claude: providerReport("claude", claudeConfigured, claudeConfigured ? installedSelfTest : { ran: false, ok: false, diagnostic: null }, ledger),
+  codex: providerReport("codex", codexConfigured, codexConfigured ? installedSelfTest : { ran: false, ok: false, diagnostic: null }, ledger),
 };
 report.lifetime = {
   sessions: lt.total_sessions ?? 0,

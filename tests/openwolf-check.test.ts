@@ -51,7 +51,9 @@ describe("openwolf-check provider evidence", () => {
       fs.mkdirSync(hooks, { recursive: true });
       fs.writeFileSync(path.join(hooks, "session-start.js"), "process.exit(0);", "utf-8");
     });
-    assert.deepStrictEqual(run(root).providers.codex, { configured: true, self_tested: true, receipt: "unknown", health: "self-tested" });
+    const providers = run(root).providers;
+    assert.deepStrictEqual(providers.codex, { configured: true, self_tested: true, receipt: "unknown", health: "self-tested" });
+    assert.deepStrictEqual(providers.claude, { configured: false, self_tested: false, receipt: "unknown", health: "unknown" });
   });
 
   test("only confirmed receipt is active and failure is not erased", () => {
