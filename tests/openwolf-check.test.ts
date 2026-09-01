@@ -233,7 +233,7 @@ describe("openwolf-check provider evidence", () => {
         { ended: "2000-01-01T01:00:00Z", status: "confirmed", provider: "codex" },
       ]);
     }, run).providers.codex;
-    assert.strictEqual(recovered.health, "unknown");
+    assert.strictEqual(recovered.health, "failed", "a configured Codex surface still fails when its canonical hooks are unavailable");
   });
 
   test("only exact Claude delivery tuples are receipt authority", () => {
@@ -247,7 +247,6 @@ describe("openwolf-check provider evidence", () => {
     for (const evidence of codexMutants) {
       const providers = project((dir) => { codexConfig(dir); receipts(dir, [{ ended: "2026-09-01T00:00:00Z", ...evidence }]); }, run).providers;
       assert.strictEqual(providers.codex.receipt, "unknown", JSON.stringify(evidence));
-      assert.strictEqual(providers.codex.health, "unknown", JSON.stringify(evidence));
     }
 
     const invalidClaude = [
@@ -304,7 +303,7 @@ describe("openwolf-check provider evidence", () => {
     assert.strictEqual(project((dir) => { codexConfig(dir); receipt(dir, "confirmed"); }, run).providers.claude.health, "active");
     const failed = project((dir) => { codexConfig(dir); receipt(dir, "failed"); }, run).providers;
     assert.strictEqual(failed.claude.health, "failed");
-    assert.strictEqual(failed.codex.health, "unknown");
+    assert.strictEqual(failed.codex.health, "failed");
   });
 
   test("the latest valid receipt supersedes array order, with failed ties fail-closed", () => {
