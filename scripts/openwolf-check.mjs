@@ -138,13 +138,16 @@ function receiptStatus(evidence, provider) {
     evidence.hooks_fired === 0 || evidence.hooks_failed > evidence.hooks_fired ||
     evidence.injections_delivered > evidence.hooks_fired ||
     !evidence.per_hook || typeof evidence.per_hook !== "object" || Array.isArray(evidence.per_hook)) return null;
+  if ((evidence.injections_delivered === 0) !== (evidence.injection_tokens_delivered === 0)) return null;
   const perHook = Object.entries(evidence.per_hook);
   if (perHook.length === 0 || !perHook.every(([, entry]) => entry && typeof entry === "object" &&
     whole(entry.fired) && entry.fired > 0 && whole(entry.failed) && whole(entry.last_exit) &&
     entry.failed <= entry.fired && (entry.last_exit === 0 || entry.failed > 0))) return null;
   const totals = perHook.reduce((sum, [, entry]) => ({ fired: sum.fired + entry.fired, failed: sum.failed + entry.failed }), { fired: 0, failed: 0 });
   if (totals.fired !== evidence.hooks_fired || totals.failed !== evidence.hooks_failed) return null;
-  if ("last_failure" in evidence) {
+  const hasLastFailure = "last_failure" in evidence;
+  if ((evidence.hooks_failed > 0) !== hasLastFailure) return null;
+  if (hasLastFailure) {
     const failure = evidence.last_failure;
     const failedHook = failure && typeof failure === "object" && !Array.isArray(failure) ? evidence.per_hook[failure.hook] : null;
     if (!failedHook || failedHook.failed === 0 || typeof failure.stderr_head !== "string" || failure.stderr_head.length > 200) return null;

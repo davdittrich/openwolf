@@ -103,13 +103,14 @@ function receipts(root: string, entries: Array<{
     lifetime: {},
     sessions: entries.map(({ ended, status, provider = "claude", variant = "claude_attachment", verified, hooks_fired = 1, hooks_failed, injections_delivered = 0, injection_tokens_delivered = 0, per_hook, last_failure }) => {
       const failed = hooks_failed ?? (status === "failed" ? 1 : 0);
+      const writerFailure = failed > 0 ? { hook: "session-start.js", stderr_head: "writer failure" } : undefined;
       return {
         ended,
         totals: {},
         verified: verified ?? {
           provider, status, variant, hooks_fired, hooks_failed: failed, injections_delivered, injection_tokens_delivered,
           per_hook: per_hook ?? { "session-start.js": { fired: hooks_fired, failed, last_exit: failed > 0 ? 1 : 0 } },
-          ...(last_failure === undefined ? {} : { last_failure }),
+          ...(last_failure === undefined ? (writerFailure ? { last_failure: writerFailure } : {}) : { last_failure }),
         },
       };
     }),
