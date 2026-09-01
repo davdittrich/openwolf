@@ -111,10 +111,11 @@ export function extractAffectedPatchPaths(
       if (line === PATCH_EOF) {
         if (changes === 0) return null;
         index += 1;
+        if (lines[index] === "" && lines[index + 1] === PATCH_END) index += 1;
         break;
       }
       if (line.startsWith("*** ")) break;
-      const context = line === "@@" || (line.startsWith("@@ ") && line.length > 3);
+      const context = line === "" ? changes > 0 : line === "@@" || (line.startsWith("@@ ") && line.length > 3);
       const change = (line.startsWith("+") || line.startsWith("-") || line.startsWith(" ")) && line.length > 1;
       if (!context && !change) return null;
       changes += 1;
