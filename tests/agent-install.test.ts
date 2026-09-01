@@ -124,6 +124,7 @@ describe("codex adapter hooks.json", () => {
     for (const [name, config, warning] of [
       ["missing feature key", "[model]\nname = \"x\"\n", false],
       ["deprecated alias enabled", "[features]\ncodex_hooks = true\n", false],
+      ["root feature with nested decoy", "[features]\nhooks = true\n[features.nested]\nhooks = false\n", false],
       ["canonical disabled", "[features]\nhooks = false\n", true],
       ["ambiguous feature", "[features]\nhooks = true\nhooks = true\n", true],
     ] as const) {

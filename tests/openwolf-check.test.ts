@@ -210,6 +210,9 @@ describe("openwolf-check provider evidence", () => {
       ["conflicting keys", "[features]\nhooks = true\ncodex_hooks = false\n", false],
       ["duplicate key", "[features]\nhooks = true\nhooks = true\n", false],
       ["malformed value", "[features]\nhooks = maybe\n", false],
+      ["nested feature does not override root", "[features]\nhooks = true\n[features.nested]\nhooks = false\n", true],
+      ["parser-invalid document", "[features]\nhooks = true\nbroken = [\n", false],
+      ["oversized document", "[features]\nhooks = true\n# " + "x".repeat(1024 * 1024), false],
     ] as const) {
       project((root) => codexConfig(root, { config }), (root) => {
         assert.strictEqual(run(root).providers.codex.configured, configured, name);
