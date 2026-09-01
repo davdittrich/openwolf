@@ -1,11 +1,11 @@
 import { describe, test } from "node:test";
 import * as assert from "node:assert";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 
 const DIST_HOOKS = path.resolve(import.meta.dirname, "..", "dist", "hooks");
+const TEST_TMPDIR = process.env.OPENWOLF_TEST_TMPDIR ?? "/dev/shm";
 
 const patchCommand = [
   "*** Begin Patch",
@@ -20,7 +20,7 @@ const patchCommand = [
 ].join("\n");
 
 function projectRoot(): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openwolf-provider-boundary-"));
+  const root = fs.mkdtempSync(path.join(TEST_TMPDIR, "openwolf-provider-boundary-"));
   fs.mkdirSync(path.join(root, "src"), { recursive: true });
   return root;
 }
@@ -179,6 +179,63 @@ describe("provider hook boundary", () => {
       const session = JSON.parse(fs.readFileSync(path.join(root, ".wolf", "hooks", "sessions", "session-1.json"), "utf-8"));
       assert.deepStrictEqual(session.files_written.map((entry: { file: string }) => entry.file), ["src/a.ts", "src/b.ts", "src/c.ts"]);
       assert.deepStrictEqual(Object.keys(session.edit_counts), ["src/a.ts", "src/b.ts", "src/c.ts"]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("removes deleted and moved sources from anatomy while retaining post-write bookkeeping", () => {
+    assert.ok(fs.existsSync(path.join(DIST_HOOKS, "post-write.js")), "run pnpm build:hooks before this test");
+    const root = projectRoot();
+    const source = path.join(root, "src", "moved.ts");
+    const deleted = path.join(root, "src", "deleted.ts");
+    const destination = path.join(root, "src", "destination.ts");
+    const run = (command: string) => spawnSync(process.execPath, [path.join(root, ".wolf", "hooks", "post-write.js")], {
+      input: JSON.stringify({
+        hook_event_name: "PostToolUse",
+        tool_name: "apply_patch",
+        session_id: "delete-move",
+        tool_input: { command },
+      }),
+      encoding: "utf-8",
+      env: { ...process.env, CODEX_PROJECT_ROOT: root },
+    });
+    try {
+      installCompiledHooks(root);
+      fs.writeFileSync(source, "export const source = true;\n");
+      fs.writeFileSync(deleted, "export const deleted = true;\n");
+      const initial = run([
+        "*** Begin Patch",
+        "*** Update File: src/moved.ts",
+        "*** Update File: src/deleted.ts",
+        "*** End Patch",
+      ].join("\n"));
+      assert.strictEqual(initial.status, 0);
+
+      fs.renameSync(source, destination);
+      fs.unlinkSync(deleted);
+      const result = run([
+        "*** Begin Patch",
+        "*** Delete File: src/deleted.ts",
+        "*** Update File: src/moved.ts",
+        "*** Move to: src/destination.ts",
+        "*** End Patch",
+      ].join("\n"));
+      assert.strictEqual(result.status, 0);
+      assert.strictEqual(result.stdout, "");
+      assert.strictEqual(result.stderr, "");
+
+      const store = JSON.parse(fs.readFileSync(path.join(root, ".wolf", "anatomy-index.json"), "utf-8"));
+      assert.deepStrictEqual(Object.keys(store.files), ["src/destination.ts"]);
+      const session = JSON.parse(fs.readFileSync(path.join(root, ".wolf", "hooks", "sessions", "delete-move.json"), "utf-8"));
+      assert.deepStrictEqual(session.files_written.map((entry: { file: string }) => entry.file), [
+        "src/moved.ts", "src/deleted.ts", "src/deleted.ts", "src/moved.ts", "src/destination.ts",
+      ]);
+      assert.deepStrictEqual(session.edit_counts, {
+        "src/moved.ts": 2,
+        "src/deleted.ts": 2,
+        "src/destination.ts": 1,
+      });
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

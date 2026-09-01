@@ -153,12 +153,15 @@ function recordPostWrite(
   //    acquired within budget we skip — a later writer converges the state.
   try {
     const relPathLocal = normalizePath(path.relative(projectRoot, absolutePath));
+    const fileExists = fs.existsSync(absolutePath);
 
     let fileContent = "";
-    try {
-      fileContent = fs.readFileSync(absolutePath, "utf-8");
-    } catch {
-      fileContent = input.tool_input?.content ?? "";
+    if (fileExists) {
+      try {
+        fileContent = fs.readFileSync(absolutePath, "utf-8");
+      } catch {
+        fileContent = input.tool_input?.content ?? "";
+      }
     }
 
     const desc = extractDescription(absolutePath).slice(0, 100);
@@ -185,16 +188,20 @@ function recordPostWrite(
 
     withAnatomyLock(wolfDir, HOOK_LOCK_BUDGET_MS, () => {
       const store = loadStoreReconciled(wolfDir, projectRoot);
-      store.files[relPathLocal] = {
-        description: desc,
-        tokens,
-        hash: sha256(fileContent).slice(0, 16),
-        size,
-        mtimeMs,
-        updatedAt: new Date().toISOString(),
-        source: "hook",
-        symbols: symbols && symbols.length > 0 ? symbols : undefined,
-      };
+      if (!fileExists) {
+        delete store.files[relPathLocal];
+      } else {
+        store.files[relPathLocal] = {
+          description: desc,
+          tokens,
+          hash: sha256(fileContent).slice(0, 16),
+          size,
+          mtimeMs,
+          updatedAt: new Date().toISOString(),
+          source: "hook",
+          symbols: symbols && symbols.length > 0 ? symbols : undefined,
+        };
+      }
       store.meta.lastScanned = new Date().toISOString();
       renderToFile(wolfDir, store);
       saveStore(wolfDir, store);
