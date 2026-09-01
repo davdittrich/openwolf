@@ -1,9 +1,11 @@
 import { describe, test } from "node:test";
 import * as assert from "node:assert";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
+
+const TEST_TMPDIR = process.env.OPENWOLF_TEST_TMPDIR;
+if (TEST_TMPDIR !== "/dev/shm") throw new Error("OPENWOLF_TEST_TMPDIR must be /dev/shm");
 
 const DIST_AGENTS = path.resolve(import.meta.dirname, "..", "dist", "src", "agents", "index.js");
 const CHECK = path.resolve(import.meta.dirname, "..", "scripts", "openwolf-check.mjs");
@@ -30,7 +32,7 @@ function entry(config: { hooks: Record<string, Array<{ matcher: string; hooks: A
 
 describe("installed Codex hook checker contract", () => {
   test("accepts actual adapter output and rejects each material mapping mutation", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "ow-codex-check-"));
+    const root = fs.mkdtempSync(path.join(TEST_TMPDIR, "ow-codex-check-"));
     try {
       fs.mkdirSync(path.join(root, ".wolf", "hooks"), { recursive: true });
       fs.mkdirSync(path.join(root, ".codex"), { recursive: true });
@@ -64,7 +66,7 @@ describe("installed Codex hook checker contract", () => {
   });
 
   test("compiled SessionStart reinjects persisted state after compact", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "ow-codex-compact-"));
+    const root = fs.mkdtempSync(path.join(TEST_TMPDIR, "ow-codex-compact-"));
     try {
       const hooksDir = path.join(root, ".wolf", "hooks");
       fs.cpSync(DIST_HOOKS, hooksDir, { recursive: true });

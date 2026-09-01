@@ -9,7 +9,7 @@ if (testRoot !== "/dev/shm") throw new Error("OPENWOLF_TEST_TMPDIR must be /dev/
 
 const packageRoot = path.join(import.meta.dirname, "..");
 const hookRecords = [
-  ["SessionStart", "startup|resume|clear", "session-start.js"],
+  ["SessionStart", "startup|resume|clear|compact", "session-start.js"],
   ["PreToolUse", "Read", "pre-read.js"],
   ["PreToolUse", "Edit|Write|MultiEdit|apply_patch", "pre-write.js"],
   ["PreToolUse", "Bash", "pre-bash.js"],
@@ -62,8 +62,13 @@ function pack(root: string): { archive: string; extracted: string } {
 test("the packed checker is shipped, read-only, and bound to its inspected project", () => {
   const root = fs.mkdtempSync(path.join(testRoot, "wolf-package-"));
   try {
+    assert.doesNotMatch(pack.toString(), /cpSync/, "package verification must install its declared runtime instead of copying a development dependency");
     const { archive, extracted } = pack(root);
     assert.ok(fs.existsSync(archive));
+    assert.ok(
+      fs.existsSync(path.join(extracted, "node_modules", "smol-toml", "package.json")),
+      "packed checker must resolve its declared installed production runtime",
+    );
     const checker = path.join(extracted, "scripts", "openwolf-check.mjs");
     assert.ok(fs.existsSync(checker), "archive must contain the public checker");
 
