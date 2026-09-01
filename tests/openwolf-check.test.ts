@@ -30,15 +30,31 @@ function run(root: string, json = true) {
   return json ? JSON.parse(out.stdout) : out.stdout;
 }
 
-const codexHookScripts = [
-  "session-start.js",
-  "pre-read.js",
-  "pre-write.js",
-  "post-read.js",
-  "post-write.js",
-  "precompact.js",
-  "stop.js",
+const codexHookRecords = [
+  { event: "SessionStart", matcher: "startup|resume|clear", script: "session-start.js" },
+  { event: "PreToolUse", matcher: "Read", script: "pre-read.js" },
+  { event: "PreToolUse", matcher: "Edit|Write|MultiEdit|apply_patch", script: "pre-write.js" },
+  { event: "PreToolUse", matcher: "Bash", script: "pre-bash.js" },
+  { event: "PostToolUse", matcher: "Read", script: "post-read.js" },
+  { event: "PostToolUse", matcher: "Edit|Write|MultiEdit|apply_patch", script: "post-write.js" },
+  { event: "PostToolUse", matcher: "Bash", script: "post-bash.js" },
+  { event: "PreCompact", matcher: "", script: "precompact.js" },
+  { event: "Stop", matcher: "", script: "stop.js" },
 ];
+
+const codexHookScripts = codexHookRecords.map(({ script }) => script);
+
+function codexHooks(root: string, records = codexHookRecords): { hooks: Record<string, unknown[]> } {
+  return {
+    hooks: records.reduce<Record<string, unknown[]>>((hooks, { event, matcher, script }) => ({
+      ...hooks,
+      [event]: [
+        ...(hooks[event] ?? []),
+        { matcher, hooks: [{ type: "command", command: `node \"${path.join(root, ".wolf", "hooks", script)}\"` }] },
+      ],
+    }), {}),
+  };
+}
 
 function codexConfig(
   root: string,
@@ -50,11 +66,7 @@ function codexConfig(
   }
   fs.writeFileSync(
     path.join(root, ".codex", "hooks.json"),
-    JSON.stringify(options.hooks ?? {
-      hooks: {
-        SessionStart: [{ hooks: codexHookScripts.map((script) => ({ command: `node \"${path.join(root, ".wolf", "hooks", script)}\"` })) }],
-      },
-    }),
+    JSON.stringify(options.hooks ?? codexHooks(root)),
     "utf-8",
   );
 }
@@ -90,21 +102,22 @@ function receipt(root: string, status: "confirmed" | "failed"): void {
 }
 
 describe("openwolf-check provider evidence", () => {
-  test("Codex configuration requires the enabled feature and every installed OpenWolf command without rewriting either config", () => {
+  test("Codex configuration requires the exact generated hook topology without rewriting either config", () => {
     const invalidConfigs = [
-      { name: "missing config", config: null, hooks: undefined },
       { name: "disabled feature", config: "[features]\nhooks = false\n", hooks: undefined },
       { name: "commented assignment", config: "[features]\n# hooks = true\n", hooks: undefined },
       { name: "foreign section", config: "[other]\nhooks = true\n", hooks: undefined },
       { name: "webhooks only", config: "[features]\nwebhooks = true\n", hooks: undefined },
-      { name: "partial commands", config: "[features]\nhooks = true\n", hooks: { hooks: { Stop: [{ hooks: [{ command: "node .wolf/hooks/stop.js" }] }] } } },
-      { name: "foreign commands", config: "[features]\nhooks = true\n", hooks: { hooks: { Stop: [{ hooks: [{ command: "echo user-hook" }] }] } } },
-      { name: "wrong command type", config: "[features]\nhooks = true\n", hooks: { hooks: { Stop: [{ hooks: [{ command: 1 }] }] } } },
+      { name: "all mappings under SessionStart", config: "[features]\nhooks = true\n", hooks: { hooks: { SessionStart: codexHookRecords.map(({ matcher, script }) => ({ matcher, hooks: [{ type: "command", command: `node \".wolf/hooks/${script}\"` }] })) } } },
+      { name: "foreign-root command", config: "[features]\nhooks = true\n", hooks: (root: string) => codexHooks(root, codexHookRecords.map((record) => record.script === "post-bash.js" ? { ...record, script: "../../foreign/.wolf/hooks/post-bash.js" } : record)) },
+      { name: "missing pre-Bash mapping", config: "[features]\nhooks = true\n", hooks: (root: string) => codexHooks(root, codexHookRecords.filter(({ script }) => script !== "pre-bash.js")) },
+      { name: "missing post-Bash mapping", config: "[features]\nhooks = true\n", hooks: (root: string) => codexHooks(root, codexHookRecords.filter(({ script }) => script !== "post-bash.js")) },
+      { name: "wrong command type", config: "[features]\nhooks = true\n", hooks: (root: string) => ({ hooks: { ...codexHooks(root).hooks, Stop: [{ matcher: "", hooks: [{ type: "mcp_tool", command: `node \"${path.join(root, ".wolf", "hooks", "stop.js")}\"` }] }] } }) },
       { name: "empty hook object", config: "[features]\nhooks = true\n", hooks: { hooks: {} } },
     ];
 
     for (const fixture of invalidConfigs) {
-      project((root) => codexConfig(root, fixture), (root) => {
+      project((root) => codexConfig(root, { ...fixture, hooks: typeof fixture.hooks === "function" ? fixture.hooks(root) : fixture.hooks }), (root) => {
         const configPath = path.join(root, ".codex", "config.toml");
         const hooksPath = path.join(root, ".codex", "hooks.json");
         const configBefore = fs.existsSync(configPath) ? fs.readFileSync(configPath) : null;
@@ -116,14 +129,26 @@ describe("openwolf-check provider evidence", () => {
       });
     }
 
-    project((root) => codexConfig(root, {
-      hooks: { version: 3, hooks: { SessionStart: [{ hooks: [
-        ...codexHookScripts.map((script) => ({ command: `node \"${path.join(root, ".wolf", "hooks", script)}\"` })),
-        { command: "echo user-hook" },
-      ] }] } },
-    }), (root) => {
-      assert.strictEqual(run(root).providers.codex.configured, true);
-    });
+    for (const feature of [
+      { name: "omitted config file", config: null },
+      { name: "omitted feature", config: "[model]\nname = \"x\"\n" },
+      { name: "enabled feature", config: "[features]\nhooks = true\n" },
+    ]) {
+      project((root) => {
+        const hooks = codexHooks(root);
+        hooks.hooks.Stop.push({ matcher: "UserTool", hooks: [{ type: "command", command: "echo user-hook" }] });
+        codexConfig(root, { config: feature.config, hooks });
+      }, (root) => {
+        const configPath = path.join(root, ".codex", "config.toml");
+        const hooksPath = path.join(root, ".codex", "hooks.json");
+        const configBefore = fs.existsSync(configPath) ? fs.readFileSync(configPath) : null;
+        const hooksBefore = fs.readFileSync(hooksPath);
+        assert.strictEqual(run(root).providers.codex.configured, true, feature.name);
+        assert.match(run(root, false), /codex.*configured yes/i, feature.name);
+        assert.deepStrictEqual(fs.existsSync(configPath) ? fs.readFileSync(configPath) : null, configBefore, feature.name);
+        assert.deepStrictEqual(fs.readFileSync(hooksPath), hooksBefore, feature.name);
+      });
+    }
   });
 
   test("malformed Codex configuration remains unknown and byte-identical", () => {
