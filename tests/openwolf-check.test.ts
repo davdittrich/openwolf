@@ -59,14 +59,29 @@ function codexConfig(
   );
 }
 
-function receipts(root: string, entries: Array<{ ended?: string; status: "confirmed" | "failed"; provider?: "claude" | "codex" }>): void {
+function receipts(root: string, entries: Array<{
+  ended?: string;
+  status?: unknown;
+  provider?: unknown;
+  variant?: unknown;
+  verified?: unknown;
+  hooks_fired?: unknown;
+  hooks_failed?: unknown;
+  injections_delivered?: unknown;
+  injection_tokens_delivered?: unknown;
+  per_hook?: unknown;
+}>): void {
   fs.writeFileSync(path.join(root, ".wolf", "token-ledger.json"), JSON.stringify({
     lifetime: {},
-    sessions: entries.map(({ ended, status, provider = "claude" }) => ({ ended, totals: {}, verified: {
-      provider, status, variant: "claude_attachment",
-      hooks_fired: 1, hooks_failed: status === "failed" ? 1 : 0,
-      injections_delivered: 0, injection_tokens_delivered: 0, per_hook: {},
-    } })),
+    sessions: entries.map(({ ended, status, provider = "claude", variant = "claude_attachment", verified, hooks_fired = 1, hooks_failed, injections_delivered = 0, injection_tokens_delivered = 0, per_hook = {} }) => ({
+      ended,
+      totals: {},
+      verified: verified ?? {
+        provider, status, variant,
+        hooks_fired, hooks_failed: hooks_failed ?? (status === "failed" ? 1 : 0),
+        injections_delivered, injection_tokens_delivered, per_hook,
+      },
+    })),
   }), "utf-8");
 }
 
@@ -149,7 +164,7 @@ describe("openwolf-check provider evidence", () => {
     });
   });
 
-  test("confirmed receipts retain authority through selfchecks while newer explicit evidence controls failure and recovery", () => {
+  test("Codex receipt claims never promote health through selfchecks", () => {
     const active = project((dir) => {
       codexConfig(dir);
       receipts(dir, [{ ended: "2000-01-01T00:00:00Z", status: "confirmed", provider: "codex" }]);
@@ -157,7 +172,7 @@ describe("openwolf-check provider evidence", () => {
       fs.mkdirSync(hooks, { recursive: true });
       fs.writeFileSync(path.join(hooks, "session-start.js"), "process.exit(0);", "utf-8");
     }, run).providers.codex;
-    assert.deepStrictEqual(active, { configured: true, self_tested: true, receipt: "confirmed", health: "active" });
+    assert.deepStrictEqual(active, { configured: true, self_tested: true, receipt: "unknown", health: "self-tested" });
 
     const selfcheckFailure = project((dir) => {
       codexConfig(dir);
@@ -166,7 +181,7 @@ describe("openwolf-check provider evidence", () => {
       fs.mkdirSync(hooks, { recursive: true });
       fs.writeFileSync(path.join(hooks, "session-start.js"), "process.exit(1);", "utf-8");
     }, run).providers.codex;
-    assert.strictEqual(selfcheckFailure.health, "failed");
+    assert.strictEqual(selfcheckFailure.health, "failed", "a selfcheck failure remains independently authoritative");
 
     const recovered = project((dir) => {
       codexConfig(dir);
@@ -175,7 +190,50 @@ describe("openwolf-check provider evidence", () => {
         { ended: "2000-01-01T01:00:00Z", status: "confirmed", provider: "codex" },
       ]);
     }, run).providers.codex;
-    assert.strictEqual(recovered.health, "active");
+    assert.strictEqual(recovered.health, "unknown");
+  });
+
+  test("only exact Claude delivery tuples are receipt authority", () => {
+    const codexMutants = [
+      { provider: "codex", status: "confirmed", variant: "claude_attachment" },
+      { provider: "codex", status: "failed", variant: "claude_attachment" },
+      { provider: "codex", status: "confirmed", variant: "unavailable" },
+      { provider: "codex", status: "failed", variant: "invented" },
+      { provider: "codex", status: "confirmed", variant: 1 },
+    ];
+    for (const evidence of codexMutants) {
+      const providers = project((dir) => { codexConfig(dir); receipts(dir, [{ ended: "2026-09-01T00:00:00Z", ...evidence }]); }, run).providers;
+      assert.strictEqual(providers.codex.receipt, "unknown", JSON.stringify(evidence));
+      assert.strictEqual(providers.codex.health, "unknown", JSON.stringify(evidence));
+    }
+
+    const invalidClaude = [
+      { provider: "claude", status: "confirmed", variant: "unavailable" },
+      { provider: "claude", status: "failed", variant: "invented" },
+      { provider: "claude", status: "confirmed", variant: "claude_attachment", hooks_fired: -1 },
+      { provider: "claude", status: "failed", variant: "claude_attachment", hooks_failed: "1" },
+      { provider: "unknown", status: "confirmed", variant: "claude_attachment" },
+    ];
+    for (const evidence of invalidClaude) {
+      const providers = project((dir) => { receipts(dir, [{ ended: "2026-09-01T00:00:00Z", ...evidence }]); }, run).providers;
+      assert.strictEqual(providers.claude.health, "unknown", JSON.stringify(evidence));
+    }
+
+    const legacy = project((dir) => {
+      receipts(dir, [{ ended: "2026-09-01T00:00:00Z", verified: {
+        hooks_fired: 1, hooks_failed: 0, injections_delivered: 0, injection_tokens_delivered: 0, per_hook: {},
+      } }]);
+    }, run).providers;
+    assert.strictEqual(legacy.claude.health, "active");
+    assert.strictEqual(legacy.codex.health, "unknown");
+
+    const laterValidWins = project((dir) => {
+      receipts(dir, [
+        { ended: "2026-09-01T02:00:00Z", provider: "codex", status: "failed", variant: "invented" },
+        { ended: "2026-09-01T01:00:00Z", provider: "claude", status: "confirmed" },
+      ]);
+    }, run).providers;
+    assert.strictEqual(laterValidWins.claude.health, "active");
   });
 
   test("only confirmed receipt is active and failure is not erased", () => {
