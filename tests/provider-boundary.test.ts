@@ -166,7 +166,11 @@ describe("provider hook boundary", () => {
         extractAffectedPatchPaths([
           "*** Begin Patch",
           "*** Update File: src/a.ts",
+          "@@",
+          "+first",
           "*** Update File: ./src/a.ts",
+          "@@",
+          "+second",
           "*** End Patch",
         ].join("\n"), root, relativePath),
         ["src/a.ts"],
@@ -402,6 +406,8 @@ describe("provider hook boundary", () => {
       "*** Delete File: src/delete.ts",
       "*** Update File: src/from.ts",
       "*** Move to: src/to.ts",
+      "@@",
+      "+moved",
       "*** End Patch",
     ].join("\n");
     try {
@@ -464,7 +470,11 @@ describe("provider hook boundary", () => {
       const initial = run([
         "*** Begin Patch",
         "*** Update File: src/moved.ts",
+        "@@",
+        "+initial",
         "*** Update File: src/deleted.ts",
+        "@@",
+        "+initial",
         "*** End Patch",
       ].join("\n"));
       assert.strictEqual(initial.status, 0);
@@ -476,6 +486,8 @@ describe("provider hook boundary", () => {
         "*** Delete File: src/deleted.ts",
         "*** Update File: src/moved.ts",
         "*** Move to: src/destination.ts",
+        "@@",
+        "+moved",
         "*** End Patch",
       ].join("\n"));
       assert.strictEqual(result.status, 0);

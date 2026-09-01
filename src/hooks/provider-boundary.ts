@@ -31,6 +31,8 @@ export type ProviderResponseIntent =
 const MAX_PATCH_BYTES = 1024 * 1024;
 const PATCH_START = "*** Begin Patch";
 const PATCH_END = "*** End Patch";
+const PATCH_ENVIRONMENT = "*** Environment ID: ";
+const PATCH_EOF = "*** End of File";
 const PATCH_HEADER = /^\*\*\* (Add|Update|Delete) File: ([^\r\n]+)$/;
 const PATCH_MOVE = /^\*\*\* Move to: ([^\r\n]+)$/;
 
@@ -50,9 +52,11 @@ function codexAuthority(event: Record<string, unknown>): SubagentAuthority {
 }
 
 function normalizePatchPath(rawPath: string, projectRoot: string, resolvePath: ProjectPathResolver): string | null {
-  if (!rawPath || rawPath.includes("\0") || path.isAbsolute(rawPath)) return null;
-  const parts = rawPath.replace(/\\/g, "/").split("/");
-  if (parts.some((part) => part === ".." || part === "")) return null;
+  if (!rawPath || rawPath.includes("\0")) return null;
+  if (!path.isAbsolute(rawPath)) {
+    const parts = rawPath.replace(/\\/g, "/").split("/");
+    if (parts.some((part) => part === ".." || part === "")) return null;
+  }
   const normalized = resolvePath(projectRoot, rawPath);
   return normalized === null || normalized === "" ? null : normalized;
 }
@@ -68,27 +72,55 @@ export function extractAffectedPatchPaths(
   if (lines[0] !== PATCH_START || lines.at(-1) !== PATCH_END) return null;
 
   const paths: string[] = [];
-  let pendingMove = false;
-  for (const line of lines.slice(1, -1)) {
-    const header = line.match(PATCH_HEADER);
-    if (header) {
-      const normalized = normalizePatchPath(header[2], projectRoot, resolvePath);
-      if (normalized === null) return null;
-      paths.push(normalized);
-      pendingMove = header[1] === "Update";
+  let index = 1;
+  if (lines[index]?.startsWith(PATCH_ENVIRONMENT)) {
+    if (!lines[index].slice(PATCH_ENVIRONMENT.length).trim()) return null;
+    index += 1;
+  }
+
+  while (index < lines.length - 1) {
+    const header = lines[index].match(PATCH_HEADER);
+    if (!header) return null;
+    const normalized = normalizePatchPath(header[2], projectRoot, resolvePath);
+    if (normalized === null) return null;
+    paths.push(normalized);
+    index += 1;
+
+    if (header[1] === "Delete") continue;
+    if (header[1] === "Add") {
+      let additions = 0;
+      while (index < lines.length - 1 && !lines[index].startsWith("*** ")) {
+        if (!lines[index].startsWith("+") || lines[index].length === 1) return null;
+        additions += 1;
+        index += 1;
+      }
+      if (additions === 0) return null;
       continue;
     }
-    const move = line.match(PATCH_MOVE);
+
+    const move = lines[index]?.match(PATCH_MOVE);
     if (move) {
-      if (!pendingMove) return null;
-      const normalized = normalizePatchPath(move[1], projectRoot, resolvePath);
-      if (normalized === null) return null;
-      paths.push(normalized);
-      pendingMove = false;
-      continue;
+      const destination = normalizePatchPath(move[1], projectRoot, resolvePath);
+      if (destination === null) return null;
+      paths.push(destination);
+      index += 1;
     }
-    if (line.startsWith("*** ")) return null;
-    pendingMove = false;
+    let changes = 0;
+    while (index < lines.length - 1) {
+      const line = lines[index];
+      if (line === PATCH_EOF) {
+        if (changes === 0) return null;
+        index += 1;
+        break;
+      }
+      if (line.startsWith("*** ")) break;
+      const context = line === "@@" || (line.startsWith("@@ ") && line.length > 3);
+      const change = (line.startsWith("+") || line.startsWith("-") || line.startsWith(" ")) && line.length > 1;
+      if (!context && !change) return null;
+      changes += 1;
+      index += 1;
+    }
+    if (changes === 0) return null;
   }
   if (paths.length === 0) return null;
   return [...new Set(paths)];
