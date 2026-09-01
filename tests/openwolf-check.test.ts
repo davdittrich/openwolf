@@ -8,11 +8,25 @@ import { verifyHookDelivery } from "../src/hooks/hook-attachments.ts";
 
 const check = path.join(import.meta.dirname, "..", "scripts", "openwolf-check.mjs");
 
+const TEST_TMPDIR = process.env.OPENWOLF_TEST_TMPDIR;
+if (TEST_TMPDIR !== "/dev/shm") throw new Error("OPENWOLF_TEST_TMPDIR must be /dev/shm");
+
 function withProject<T>(body: (root: string) => T): T {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wolf-check-"));
+  const root = fs.mkdtempSync(path.join(TEST_TMPDIR, "wolf-check-"));
   try {
     fs.mkdirSync(path.join(root, ".wolf"), { recursive: true });
     return body(root);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+
+async function withAsyncProject<T>(body: (root: string) => Promise<T>): Promise<T> {
+  const root = fs.mkdtempSync(path.join(TEST_TMPDIR, "wolf-check-"));
+  try {
+    fs.mkdirSync(path.join(root, ".wolf"), { recursive: true });
+    return await body(root);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -182,6 +196,47 @@ describe("openwolf-check provider evidence", () => {
         assert.deepStrictEqual(fs.readFileSync(hooksPath), hooksBefore, feature.name);
       });
     }
+  });
+
+
+  test("Codex feature state is default-on but explicit disable and ambiguity fail closed", () => {
+    for (const [name, config, configured] of [
+      ["missing file", null, true],
+      ["missing feature key", "[features]\nother = true\n", true],
+      ["canonical true", "[features]\nhooks = true\n", true],
+      ["deprecated alias true", "[features]\ncodex_hooks = true\n", true],
+      ["canonical false", "[features]\nhooks = false\n", false],
+      ["deprecated alias false", "[features]\ncodex_hooks = false\n", false],
+      ["conflicting keys", "[features]\nhooks = true\ncodex_hooks = false\n", false],
+      ["duplicate key", "[features]\nhooks = true\nhooks = true\n", false],
+      ["malformed value", "[features]\nhooks = maybe\n", false],
+    ] as const) {
+      project((root) => codexConfig(root, { config }), (root) => {
+        assert.strictEqual(run(root).providers.codex.configured, configured, name);
+      });
+    }
+  });
+
+  test("actual compiled Codex installation is the checker authority", async () => await withAsyncProject(async (root) => {
+    const templatesDir = path.join(root, "templates");
+    fs.mkdirSync(templatesDir, { recursive: true });
+    const { resolveAgents } = await import("../dist/src/agents/index.js");
+    const [adapter] = resolveAgents(["codex"]);
+    adapter.install({ projectRoot: root, wolfDir: path.join(root, ".wolf"), templatesDir });
+    assert.strictEqual(run(root).providers.codex.configured, true);
+  }));
+
+  test("a foreign Claude hook command cannot claim configured delivery", () => {
+    project((root) => {
+      fs.mkdirSync(path.join(root, ".claude"), { recursive: true });
+      fs.writeFileSync(path.join(root, ".claude", "settings.json"), JSON.stringify({
+        hooks: {
+          PostToolUse: [{ matcher: "Bash", hooks: [{ type: "command", command: 'node "/foreign/.wolf/hooks/post-bash.js"' }] }],
+        },
+      }));
+    }, (root) => {
+      assert.strictEqual(run(root).providers.claude.configured, false);
+    });
   });
 
   test("malformed Codex configuration remains unknown and byte-identical", () => {

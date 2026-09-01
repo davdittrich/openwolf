@@ -22,13 +22,22 @@ async function loadCodexAdapter(): Promise<{ install: (ctx: unknown) => { action
   return adapter;
 }
 
-function project(): { projectRoot: string; wolfDir: string; templatesDir: string } {
-  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), "ow-codex-"));
+const TEST_TMPDIR = process.env.OPENWOLF_TEST_TMPDIR;
+if (TEST_TMPDIR !== "/dev/shm") throw new Error("OPENWOLF_TEST_TMPDIR must be /dev/shm");
+
+async function project<T>(
+  body: (ctx: { projectRoot: string; wolfDir: string; templatesDir: string }) => T | Promise<T>,
+): Promise<T> {
+  const projectRoot = fs.mkdtempSync(path.join(TEST_TMPDIR, "ow-codex-"));
   const wolfDir = path.join(projectRoot, ".wolf");
   const templatesDir = path.join(projectRoot, "templates");
-  fs.mkdirSync(wolfDir, { recursive: true });
-  fs.mkdirSync(templatesDir, { recursive: true });
-  return { projectRoot, wolfDir, templatesDir };
+  try {
+    fs.mkdirSync(wolfDir, { recursive: true });
+    fs.mkdirSync(templatesDir, { recursive: true });
+    return await body({ projectRoot, wolfDir, templatesDir });
+  } finally {
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  }
 }
 
 describe("codex adapter hooks.json", () => {
@@ -36,37 +45,23 @@ describe("codex adapter hooks.json", () => {
     assert.ok(fs.existsSync(DIST_AGENTS), "pnpm test must build dist before importing the Codex adapter");
   });
 
-  test("a malformed existing hooks.json is left byte-identical and warned about", async () => {
+  test("a malformed existing hooks.json is left byte-identical and warned about", async () => await project(async (ctx) => {
     const codexAdapter = await loadCodexAdapter();
-    const ctx = project();
     const hooksPath = path.join(ctx.projectRoot, ".codex", "hooks.json");
     fs.mkdirSync(path.dirname(hooksPath), { recursive: true });
-    // Valid-looking user hooks with one trailing comma: recoverable by hand.
     const original = '{\n  "hooks": {\n    "SessionStart": [{ "matcher": "startup" }],\n  }\n}\n';
     fs.writeFileSync(hooksPath, original, "utf-8");
     const before = fs.readFileSync(hooksPath);
 
     const result = codexAdapter.install(ctx);
 
-    assert.deepStrictEqual(
-      fs.readFileSync(hooksPath),
-      before,
-      "malformed user file must be byte-identical after install",
-    );
-    assert.strictEqual(
-      result.warnings.filter((w: string) => w.includes("hooks.json")).length,
-      1,
-      "exactly one actionable warning about the file",
-    );
-    assert.ok(
-      !result.actions.some((a: string) => a.includes("hooks registered")),
-      "install must not claim hooks were registered",
-    );
-  });
+    assert.deepStrictEqual(fs.readFileSync(hooksPath), before, "malformed user file must be byte-identical after install");
+    assert.strictEqual(result.warnings.filter((w: string) => w.includes("hooks.json")).length, 1, "exactly one actionable warning about the file");
+    assert.ok(!result.actions.some((a: string) => a.includes("hooks registered")), "install must not claim hooks were registered");
+  }));
 
-  test("an unreadable-shaped hooks.json (top-level array) is also preserved", async () => {
+  test("an unreadable-shaped hooks.json (top-level array) is also preserved", async () => await project(async (ctx) => {
     const codexAdapter = await loadCodexAdapter();
-    const ctx = project();
     const hooksPath = path.join(ctx.projectRoot, ".codex", "hooks.json");
     fs.mkdirSync(path.dirname(hooksPath), { recursive: true });
     fs.writeFileSync(hooksPath, '["something else entirely"]\n', "utf-8");
@@ -76,25 +71,16 @@ describe("codex adapter hooks.json", () => {
 
     assert.deepStrictEqual(fs.readFileSync(hooksPath), before);
     assert.ok(result.warnings.some((w: string) => w.includes("hooks.json")));
-  });
+  }));
 
-  test("a valid existing hooks.json keeps user hooks and unknown top-level keys", async () => {
+  test("a valid existing hooks.json keeps user hooks and unknown top-level keys", async () => await project(async (ctx) => {
     const codexAdapter = await loadCodexAdapter();
-    const ctx = project();
     const hooksPath = path.join(ctx.projectRoot, ".codex", "hooks.json");
     fs.mkdirSync(path.dirname(hooksPath), { recursive: true });
-    fs.writeFileSync(
-      hooksPath,
-      JSON.stringify(
-        {
-          version: 3,
-          hooks: { SessionStart: [{ matcher: "startup", hooks: [{ type: "command", command: "echo mine" }] }] },
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    fs.writeFileSync(hooksPath, JSON.stringify({
+      version: 3,
+      hooks: { SessionStart: [{ matcher: "startup", hooks: [{ type: "command", command: "echo mine" }] }] },
+    }, null, 2), "utf-8");
 
     const result = codexAdapter.install(ctx);
     const written = JSON.parse(fs.readFileSync(hooksPath, "utf-8"));
@@ -104,30 +90,52 @@ describe("codex adapter hooks.json", () => {
     assert.ok(sessionStart.includes("echo mine"), "user hook preserved");
     assert.ok(sessionStart.includes("session-start.js"), "OpenWolf hook added");
     assert.ok(result.actions.some((a: string) => a.includes("hooks registered")));
-  });
+  }));
 
-  test("no existing file: OpenWolf hooks are written", async () => {
+  test("no existing file: OpenWolf hooks are written", async () => await project(async (ctx) => {
     const codexAdapter = await loadCodexAdapter();
-    const ctx = project();
     const result = codexAdapter.install(ctx);
     const written = JSON.parse(fs.readFileSync(path.join(ctx.projectRoot, ".codex", "hooks.json"), "utf-8"));
     assert.ok(Array.isArray(written.hooks.SessionStart));
     assert.ok(result.actions.some((a: string) => a.includes("hooks registered")));
-  });
+  }));
 
-  test("install is idempotent: a second run does not duplicate OpenWolf entries", async () => {
+
+  test("default-on hooks leave an absent config.toml absent", async () => await project(async (ctx) => {
     const codexAdapter = await loadCodexAdapter();
-    const ctx = project();
+    const result = codexAdapter.install(ctx);
+    assert.strictEqual(fs.existsSync(path.join(ctx.projectRoot, ".codex", "config.toml")), false);
+    assert.ok(!result.actions.some((action: string) => action.includes("hooks feature enabled")));
+    assert.deepStrictEqual(result.warnings, []);
+  }));
+
+
+  test("warns only for an explicit disable or ambiguous existing feature state", async () => await project(async (ctx) => {
+    const codexAdapter = await loadCodexAdapter();
+    for (const [name, config, warning] of [
+      ["missing feature key", "[model]\nname = \"x\"\n", false],
+      ["deprecated alias enabled", "[features]\ncodex_hooks = true\n", false],
+      ["canonical disabled", "[features]\nhooks = false\n", true],
+      ["ambiguous feature", "[features]\nhooks = true\nhooks = true\n", true],
+    ] as const) {
+      const configPath = path.join(ctx.projectRoot, ".codex", "config.toml");
+      fs.mkdirSync(path.dirname(configPath), { recursive: true });
+      fs.writeFileSync(configPath, config, "utf-8");
+      const before = fs.readFileSync(configPath);
+      const result = codexAdapter.install(ctx);
+      assert.strictEqual(result.warnings.some((entry: string) => entry.includes("config.toml")), warning, name);
+      assert.deepStrictEqual(fs.readFileSync(configPath), before, name);
+    }
+  }));
+
+  test("install is idempotent: a second run does not duplicate OpenWolf entries", async () => await project(async (ctx) => {
+    const codexAdapter = await loadCodexAdapter();
     const hooksPath = path.join(ctx.projectRoot, ".codex", "hooks.json");
     fs.mkdirSync(path.dirname(hooksPath), { recursive: true });
-    fs.writeFileSync(
-      hooksPath,
-      JSON.stringify({
-        version: 3,
-        hooks: { PostToolUse: [{ matcher: "Custom", hooks: [{ type: "command", command: "echo mine" }] }] },
-      }),
-      "utf-8",
-    );
+    fs.writeFileSync(hooksPath, JSON.stringify({
+      version: 3,
+      hooks: { PostToolUse: [{ matcher: "Custom", hooks: [{ type: "command", command: "echo mine" }] }] },
+    }), "utf-8");
     codexAdapter.install(ctx);
     codexAdapter.install(ctx);
     const written = JSON.parse(fs.readFileSync(hooksPath, "utf-8"));
@@ -137,5 +145,5 @@ describe("codex adapter hooks.json", () => {
     assert.deepStrictEqual(openWolfEntries.map((entry) => entry.matcher), ["Read", "Edit|Write|MultiEdit|apply_patch", "Bash"]);
     assert.deepStrictEqual(postToolUse.filter((entry) => entry.matcher === "Custom"), [{ matcher: "Custom", hooks: [{ type: "command", command: "echo mine" }] }]);
     assert.strictEqual(written.version, 3);
-  });
+  }));
 });
