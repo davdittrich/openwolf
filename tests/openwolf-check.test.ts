@@ -7,11 +7,21 @@ import { spawnSync } from "node:child_process";
 
 const check = path.join(import.meta.dirname, "..", "scripts", "openwolf-check.mjs");
 
-function project(setup: (root: string) => void): string {
+function withProject<T>(body: (root: string) => T): T {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "wolf-check-"));
-  fs.mkdirSync(path.join(root, ".wolf"), { recursive: true });
-  setup(root);
-  return root;
+  try {
+    fs.mkdirSync(path.join(root, ".wolf"), { recursive: true });
+    return body(root);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function project<T>(setup: (root: string) => void, body: (root: string) => T): T {
+  return withProject((root) => {
+    setup(root);
+    return body(root);
+  });
 }
 
 function run(root: string, json = true) {
@@ -42,30 +52,31 @@ function receipt(root: string, status: "confirmed" | "failed"): void {
 
 describe("openwolf-check provider evidence", () => {
   test("configured-only Codex remains unknown in JSON and human output", () => {
-    const root = project(codexConfig);
-    const json = run(root);
-    assert.deepStrictEqual(json.providers.codex, { configured: true, self_tested: false, receipt: "unknown", health: "unknown" });
-    assert.match(run(root, false), /codex.*configured.*unknown/i);
+    project(codexConfig, (root) => {
+      const json = run(root);
+      assert.deepStrictEqual(json.providers.codex, { configured: true, self_tested: false, receipt: "unknown", health: "unknown" });
+      assert.match(run(root, false), /codex.*configured.*unknown/i);
+    });
   });
 
   test("a successful installed selfcheck is self-tested, not active", () => {
-    const root = project((dir) => {
+    project((dir) => {
       codexConfig(dir);
       const hooks = path.join(dir, ".wolf", "hooks");
       fs.mkdirSync(hooks, { recursive: true });
       fs.writeFileSync(path.join(hooks, "session-start.js"), "process.exit(0);", "utf-8");
+    }, (root) => {
+      const providers = run(root).providers;
+      assert.deepStrictEqual(providers.codex, { configured: true, self_tested: true, receipt: "unknown", health: "self-tested" });
+      assert.deepStrictEqual(providers.claude, { configured: false, self_tested: false, receipt: "unknown", health: "unknown" });
     });
-    const providers = run(root).providers;
-    assert.deepStrictEqual(providers.codex, { configured: true, self_tested: true, receipt: "unknown", health: "self-tested" });
-    assert.deepStrictEqual(providers.claude, { configured: false, self_tested: false, receipt: "unknown", health: "unknown" });
   });
 
   test("only confirmed receipt is active and failure is not erased", () => {
-    const active = project((dir) => { codexConfig(dir); receipt(dir, "confirmed"); });
-    assert.strictEqual(run(active).providers.claude.health, "active");
-    const failed = project((dir) => { codexConfig(dir); receipt(dir, "failed"); });
-    assert.strictEqual(run(failed).providers.claude.health, "failed");
-    assert.strictEqual(run(failed).providers.codex.health, "unknown");
+    assert.strictEqual(project((dir) => { codexConfig(dir); receipt(dir, "confirmed"); }, run).providers.claude.health, "active");
+    const failed = project((dir) => { codexConfig(dir); receipt(dir, "failed"); }, run).providers;
+    assert.strictEqual(failed.claude.health, "failed");
+    assert.strictEqual(failed.codex.health, "unknown");
   });
 
   test("the latest valid receipt supersedes array order, with failed ties fail-closed", () => {
@@ -74,32 +85,32 @@ describe("openwolf-check provider evidence", () => {
         { ended: "2026-09-01T00:00:00Z", status: "failed" },
         { ended: "2026-09-01T01:00:00Z", status: "confirmed" },
       ]);
-    });
-    assert.strictEqual(run(recovered).providers.claude.health, "active");
+    }, run);
+    assert.strictEqual(recovered.providers.claude.health, "active");
 
     const reversed = project((dir) => {
       receipts(dir, [
         { ended: "2026-09-01T01:00:00Z", status: "confirmed" },
         { ended: "2026-09-01T00:00:00Z", status: "failed" },
       ]);
-    });
-    assert.strictEqual(run(reversed).providers.claude.health, "active");
+    }, run);
+    assert.strictEqual(reversed.providers.claude.health, "active");
 
     const laterFailure = project((dir) => {
       receipts(dir, [
         { ended: "2026-09-01T00:00:00Z", status: "confirmed" },
         { ended: "2026-09-01T01:00:00Z", status: "failed" },
       ]);
-    });
-    assert.strictEqual(run(laterFailure).providers.claude.health, "failed");
+    }, run);
+    assert.strictEqual(laterFailure.providers.claude.health, "failed");
 
     const tied = project((dir) => {
       receipts(dir, [
         { ended: "2026-09-01T01:00:00Z", status: "confirmed" },
         { ended: "2026-09-01T01:00:00Z", status: "failed" },
       ]);
-    });
-    assert.strictEqual(run(tied).providers.claude.health, "failed");
+    }, run);
+    assert.strictEqual(tied.providers.claude.health, "failed");
   });
 
   test("the latest selfcheck is self-tested, but invalid receipt times never override valid authority", () => {
@@ -109,8 +120,8 @@ describe("openwolf-check provider evidence", () => {
       const hooks = path.join(dir, ".wolf", "hooks");
       fs.mkdirSync(hooks, { recursive: true });
       fs.writeFileSync(path.join(hooks, "session-start.js"), "process.exit(0);", "utf-8");
-    });
-    assert.strictEqual(run(selfTested).providers.codex.health, "self-tested");
+    }, run);
+    assert.strictEqual(selfTested.providers.codex.health, "self-tested");
 
     const validWins = project((dir) => {
       receipts(dir, [
@@ -118,22 +129,38 @@ describe("openwolf-check provider evidence", () => {
         { ended: "2026-09-01T01:00:00Z", status: "confirmed" },
         { status: "failed" },
       ]);
-    });
-    const json = run(validWins);
+    }, run);
+    const json = validWins;
     assert.strictEqual(json.providers.claude.health, "active");
-    assert.match(run(validWins, false), /claude.*active/i);
+    assert.match(project((dir) => {
+      receipts(dir, [
+        { ended: "not-a-date", status: "failed" },
+        { ended: "2026-09-01T01:00:00Z", status: "confirmed" },
+        { status: "failed" },
+      ]);
+    }, (root) => run(root, false)), /claude.*active/i);
   });
 
   test("failed selfcheck stays failed with a bounded non-sensitive diagnostic", () => {
-    const root = project((dir) => {
+    const evidence = project((dir) => {
       codexConfig(dir);
       const hooks = path.join(dir, ".wolf", "hooks");
       fs.mkdirSync(hooks, { recursive: true });
       fs.writeFileSync(path.join(hooks, "session-start.js"), 'console.error("secret=/outside/project"); process.exit(1);', "utf-8");
-    });
-    const evidence = run(root).providers.codex;
+    }, run).providers.codex;
     assert.strictEqual(evidence.health, "failed");
     assert.strictEqual(evidence.diagnostic, "installed hook selfcheck failed");
     assert.doesNotMatch(JSON.stringify(evidence), /secret|outside/);
+  });
+});
+
+describe("openwolf-check fixture lifecycle (#18)", () => {
+  test("removes its exact temporary root when the fixture body throws", () => {
+    let root = "";
+    assert.throws(() => withProject((dir) => {
+      root = dir;
+      throw new Error("intentional fixture failure");
+    }), /intentional fixture failure/);
+    assert.strictEqual(fs.existsSync(root), false);
   });
 });

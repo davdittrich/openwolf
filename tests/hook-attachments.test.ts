@@ -9,10 +9,15 @@ import { hookProviderFromAgent, verifyHookDelivery } from "../src/hooks/hook-att
 import { readUsageSequence, attributeCacheRebuilds } from "../src/tracker/cache-attribution.ts";
 import { positionWeightedCostUsd } from "../src/hooks/ledger-math.ts";
 
-function writeTranscript(lines: unknown[]): string {
-  const p = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "wolf-att-")), "t.jsonl");
-  fs.writeFileSync(p, lines.map((l) => JSON.stringify(l)).join("\n") + "\n", "utf-8");
-  return p;
+function withTranscript<T>(lines: unknown[], body: (transcript: string) => T): T {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "wolf-att-"));
+  const transcript = path.join(root, "t.jsonl");
+  try {
+    fs.writeFileSync(transcript, lines.map((l) => JSON.stringify(l)).join("\n") + "\n", "utf-8");
+    return body(transcript);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 }
 
 function hookLine(opts: { hookName: string; command: string; exitCode: number; stdout?: string; stderr?: string; type?: string }) {
@@ -32,94 +37,106 @@ function hookLine(opts: { hookName: string; command: string; exitCode: number; s
   };
 }
 
-function runTerminalHook(hook: "stop" | "session-end", env: Record<string, string>): any {
+function withTerminalHook<T>(hook: "stop" | "session-end", env: Record<string, string>, body: (result: { project: string; verified: any }) => T): T {
   const project = fs.mkdtempSync(path.join(os.tmpdir(), "wolf-terminal-"));
-  const wolfDir = path.join(project, ".wolf");
-  const hooksDir = path.join(wolfDir, "hooks");
-  fs.mkdirSync(path.join(hooksDir, "sessions"), { recursive: true });
-  fs.cpSync(path.join(import.meta.dirname, "..", "dist", "hooks"), hooksDir, { recursive: true });
-  fs.writeFileSync(path.join(hooksDir, "sessions", "session-1.json"), JSON.stringify({
-    session_id: "session-1",
-    started: "2026-09-01T00:00:00Z",
-    files_read: { "src/a.ts": { tokens: 1, count: 1 } },
-    files_written: [], edit_counts: {}, anatomy_hits: 0, anatomy_misses: 0,
-    repeated_reads_warned: 0, stop_count: 0, reminders_sent: {},
-  }), "utf-8");
-  const transcript = writeTranscript([
-    hookLine({ hookName: "SessionStart:startup", command: 'node "$CLAUDE_PROJECT_DIR/.wolf/hooks/session-start.js"', exitCode: 0 }),
-  ]);
-  const run = spawnSync(process.execPath, [path.join(hooksDir, `${hook}.js`)], {
-    cwd: project,
-    env: { ...process.env, OPENWOLF_PROJECT_ROOT: project, ...env },
-    input: JSON.stringify({ session_id: "session-1", transcript_path: transcript }),
-    encoding: "utf-8",
-  });
-  assert.strictEqual(run.status, 0, run.stderr);
-  return JSON.parse(fs.readFileSync(path.join(wolfDir, "token-ledger.json"), "utf-8")).sessions[0].verified;
+  try {
+    const wolfDir = path.join(project, ".wolf");
+    const hooksDir = path.join(wolfDir, "hooks");
+    fs.mkdirSync(path.join(hooksDir, "sessions"), { recursive: true });
+    fs.cpSync(path.join(import.meta.dirname, "..", "dist", "hooks"), hooksDir, { recursive: true });
+    fs.writeFileSync(path.join(hooksDir, "sessions", "session-1.json"), JSON.stringify({
+      session_id: "session-1",
+      started: "2026-09-01T00:00:00Z",
+      files_read: { "src/a.ts": { tokens: 1, count: 1 } },
+      files_written: [], edit_counts: {}, anatomy_hits: 0, anatomy_misses: 0,
+      repeated_reads_warned: 0, stop_count: 0, reminders_sent: {},
+    }), "utf-8");
+    return withTranscript([
+      hookLine({ hookName: "SessionStart:startup", command: 'node "$CLAUDE_PROJECT_DIR/.wolf/hooks/session-start.js"', exitCode: 0 }),
+    ], (transcript) => {
+      const run = spawnSync(process.execPath, [path.join(hooksDir, `${hook}.js`)], {
+        cwd: project,
+        env: { ...process.env, OPENWOLF_PROJECT_ROOT: project, ...env },
+        input: JSON.stringify({ session_id: "session-1", transcript_path: transcript }),
+        encoding: "utf-8",
+      });
+      assert.strictEqual(run.status, 0, run.stderr);
+      const verified = JSON.parse(fs.readFileSync(path.join(wolfDir, "token-ledger.json"), "utf-8")).sessions[0].verified;
+      return body({ project, verified });
+    });
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
+  }
+}
+
+function runTerminalHook(hook: "stop" | "session-end", env: Record<string, string>): any {
+  return withTerminalHook(hook, env, ({ verified }) => verified);
 }
 
 describe("verifyHookDelivery", () => {
   test("counts fired/failed/delivered for OpenWolf hooks only", () => {
     const inject = JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: "x".repeat(400) } });
-    const p = writeTranscript([
+    withTranscript([
       hookLine({ hookName: "SessionStart:startup", command: `node "$CLAUDE_PROJECT_DIR/.wolf/hooks/session-start.js"`, exitCode: 0, stdout: inject }),
       hookLine({ hookName: "PreToolUse:Read", command: `node "$CLAUDE_PROJECT_DIR/.wolf/hooks/pre-read.js"`, exitCode: 0 }),
       hookLine({ hookName: "PostToolUse:Write", command: `node "$CLAUDE_PROJECT_DIR/.wolf/hooks/post-write.js"`, exitCode: 1, stderr: "ERR_MODULE_NOT_FOUND: symbol-extractor.js" }),
       // Somebody else's hook: never counted.
       hookLine({ hookName: "PreToolUse:Bash", command: "node /somewhere/else/guard.js", exitCode: 1 }),
       { type: "assistant", message: { id: "m1", usage: { output_tokens: 5 } } },
-    ]);
-    const v = verifyHookDelivery(p)!;
-    assert.strictEqual(v.hooks_fired, 3);
-    assert.strictEqual(v.hooks_failed, 1);
-    assert.strictEqual(v.injections_delivered, 1);
-    assert.strictEqual(v.injection_tokens_delivered, 100);
-    assert.strictEqual(v.per_hook["post-write.js"].failed, 1);
-    assert.ok(v.last_failure!.stderr_head.includes("ERR_MODULE_NOT_FOUND"));
+    ], (transcript) => {
+      const v = verifyHookDelivery(transcript)!;
+      assert.strictEqual(v.hooks_fired, 3);
+      assert.strictEqual(v.hooks_failed, 1);
+      assert.strictEqual(v.injections_delivered, 1);
+      assert.strictEqual(v.injection_tokens_delivered, 100);
+      assert.strictEqual(v.per_hook["post-write.js"].failed, 1);
+      assert.ok(v.last_failure!.stderr_head.includes("ERR_MODULE_NOT_FOUND"));
+    });
   });
 
   test("returns null when the transcript format has drifted (schema probe)", () => {
-    const p = writeTranscript([{ totally: "different" }, { schema: "now" }, { no: "type field" }]);
-    assert.strictEqual(verifyHookDelivery(p), null);
+    withTranscript([{ totally: "different" }, { schema: "now" }, { no: "type field" }], (transcript) => {
+      assert.strictEqual(verifyHookDelivery(transcript), null);
+    });
     assert.strictEqual(verifyHookDelivery("/nonexistent/path.jsonl"), null);
   });
 
   test("returns provider-primary confirmed and failed Claude receipt evidence", () => {
-    const confirmed = writeTranscript([
+    withTranscript([
       hookLine({ hookName: "SessionStart:startup", command: 'node "$CLAUDE_PROJECT_DIR/.wolf/hooks/session-start.js"', exitCode: 0 }),
-    ]);
-    const failed = writeTranscript([
+    ], (confirmed) => withTranscript([
       hookLine({ hookName: "PostToolUse:Write", command: 'node "$CLAUDE_PROJECT_DIR/.wolf/hooks/post-write.js"', exitCode: 1, stderr: "x".repeat(300) }),
-    ]);
-
-    assert.deepStrictEqual(verifyHookDelivery("claude", confirmed), {
-      provider: "claude",
-      status: "confirmed",
-      variant: "claude_attachment",
-      hooks_fired: 1,
-      hooks_failed: 0,
-      injections_delivered: 0,
-      injection_tokens_delivered: 0,
-      per_hook: { "session-start.js": { fired: 1, failed: 0, last_exit: 0 } },
-    });
-    const evidence = verifyHookDelivery("claude", failed);
-    assert.strictEqual(evidence.provider, "claude");
-    assert.strictEqual(evidence.status, "failed");
-    assert.strictEqual(evidence.variant, "claude_attachment");
-    assert.strictEqual(evidence.last_failure?.stderr_head.length, 200);
+    ], (failed) => {
+      assert.deepStrictEqual(verifyHookDelivery("claude", confirmed), {
+        provider: "claude",
+        status: "confirmed",
+        variant: "claude_attachment",
+        hooks_fired: 1,
+        hooks_failed: 0,
+        injections_delivered: 0,
+        injection_tokens_delivered: 0,
+        per_hook: { "session-start.js": { fired: 1, failed: 0, last_exit: 0 } },
+      });
+      const evidence = verifyHookDelivery("claude", failed);
+      assert.strictEqual(evidence.provider, "claude");
+      assert.strictEqual(evidence.status, "failed");
+      assert.strictEqual(evidence.variant, "claude_attachment");
+      assert.strictEqual(evidence.last_failure?.stderr_head.length, 200);
+    }));
   });
 
   test("keeps unsupported, absent, and schema-drifted provider authority unknown", () => {
-    const drifted = writeTranscript([{ unsupported: true }]);
-    assert.deepStrictEqual(verifyHookDelivery("codex", drifted), {
-      provider: "codex",
-      status: "unknown",
-      variant: "unavailable",
-    });
-    assert.deepStrictEqual(verifyHookDelivery("claude", drifted), {
-      provider: "claude",
-      status: "unknown",
-      variant: "unavailable",
+    withTranscript([{ unsupported: true }], (drifted) => {
+      assert.deepStrictEqual(verifyHookDelivery("codex", drifted), {
+        provider: "codex",
+        status: "unknown",
+        variant: "unavailable",
+      });
+      assert.deepStrictEqual(verifyHookDelivery("claude", drifted), {
+        provider: "claude",
+        status: "unknown",
+        variant: "unavailable",
+      });
     });
     assert.strictEqual(hookProviderFromAgent("claude"), "claude");
     assert.strictEqual(hookProviderFromAgent("codex"), "codex");
@@ -134,6 +151,42 @@ describe("verifyHookDelivery", () => {
   });
 });
 
+describe("attachment fixture lifecycle (#18)", () => {
+  test("removes transcript roots after success and a thrown callback", () => {
+    let successfulRoot = "";
+    const result = withTranscript([], (transcript) => {
+      successfulRoot = path.dirname(transcript);
+      return fs.existsSync(transcript);
+    });
+    assert.strictEqual(result, true);
+    assert.strictEqual(fs.existsSync(successfulRoot), false);
+
+    let thrownRoot = "";
+    assert.throws(() => withTranscript([], (transcript) => {
+      thrownRoot = path.dirname(transcript);
+      throw new Error("intentional transcript failure");
+    }), /intentional transcript failure/);
+    assert.strictEqual(fs.existsSync(thrownRoot), false);
+  });
+
+  test("removes terminal roots after success and a thrown callback", () => {
+    let successfulRoot = "";
+    const result = withTerminalHook("stop", { CLAUDECODE: "1" }, ({ project, verified }) => {
+      successfulRoot = project;
+      return verified.provider;
+    });
+    assert.strictEqual(result, "claude");
+    assert.strictEqual(fs.existsSync(successfulRoot), false);
+
+    let thrownRoot = "";
+    assert.throws(() => withTerminalHook("stop", { CLAUDECODE: "1" }, ({ project }) => {
+      thrownRoot = project;
+      throw new Error("intentional terminal failure");
+    }), /intentional terminal failure/);
+    assert.strictEqual(fs.existsSync(thrownRoot), false);
+  });
+});
+
 describe("cache attribution", () => {
   const call = (i: number, over: Record<string, unknown> = {}) => ({
     type: "assistant",
@@ -145,39 +198,42 @@ describe("cache attribution", () => {
   });
 
   test("attributes a model switch rebuild", () => {
-    const p = writeTranscript([
+    withTranscript([
       call(1),
       call(2),
       { ...call(3), message: { id: "m3", model: "claude-opus-5", usage: { input_tokens: 10, output_tokens: 50, cache_read_input_tokens: 0, cache_creation_input_tokens: 390_000 } } },
-    ]);
-    const seq = readUsageSequence(p)!;
-    const report = attributeCacheRebuilds(seq.calls, seq.compactions);
-    assert.strictEqual(report.rebuilds.length, 1);
-    assert.strictEqual(report.rebuilds[0].cause, "model_switch");
-    assert.strictEqual(report.total_rebuild_tokens, 390_000);
+    ], (transcript) => {
+      const seq = readUsageSequence(transcript)!;
+      const report = attributeCacheRebuilds(seq.calls, seq.compactions);
+      assert.strictEqual(report.rebuilds.length, 1);
+      assert.strictEqual(report.rebuilds[0].cause, "model_switch");
+      assert.strictEqual(report.total_rebuild_tokens, 390_000);
+    });
   });
 
   test("attributes compaction via the compact_boundary marker", () => {
-    const p = writeTranscript([
+    withTranscript([
       call(1),
       { type: "system", subtype: "compact_boundary", timestamp: "2026-08-20T10:01:30Z" },
       { ...call(2), message: { id: "m2", model: "claude-fable-5", usage: { input_tokens: 10, output_tokens: 50, cache_read_input_tokens: 0, cache_creation_input_tokens: 200_000 } } },
-    ]);
-    const seq = readUsageSequence(p)!;
-    const report = attributeCacheRebuilds(seq.calls, seq.compactions);
-    assert.strictEqual(report.rebuilds[0].cause, "compaction");
+    ], (transcript) => {
+      const seq = readUsageSequence(transcript)!;
+      const report = attributeCacheRebuilds(seq.calls, seq.compactions);
+      assert.strictEqual(report.rebuilds[0].cause, "compaction");
+    });
   });
 
   test("attributes cache expiry on a long idle gap, ignores small growth", () => {
-    const p = writeTranscript([
+    withTranscript([
       call(1),
       { ...call(2), timestamp: "2026-08-20T12:00:00Z", message: { id: "m2", model: "claude-fable-5", usage: { input_tokens: 10, output_tokens: 50, cache_read_input_tokens: 0, cache_creation_input_tokens: 350_000 } } },
       call(3, { timestamp: "2026-08-20T12:01:00Z" }), // normal 2k creation: not a rebuild
-    ]);
-    const seq = readUsageSequence(p)!;
-    const report = attributeCacheRebuilds(seq.calls, seq.compactions);
-    assert.strictEqual(report.rebuilds.length, 1);
-    assert.strictEqual(report.rebuilds[0].cause, "cache_expired");
+    ], (transcript) => {
+      const seq = readUsageSequence(transcript)!;
+      const report = attributeCacheRebuilds(seq.calls, seq.compactions);
+      assert.strictEqual(report.rebuilds.length, 1);
+      assert.strictEqual(report.rebuilds[0].cause, "cache_expired");
+    });
   });
 });
 
