@@ -82,7 +82,7 @@ const claudeHookSurface = [
 ];
 
 const codexHookSurface = [
-  ["SessionStart", "startup|resume|clear", "session-start.js"],
+  ["SessionStart", "startup|resume|clear|compact", "session-start.js"],
   ["PreToolUse", "Read", "pre-read.js"],
   ["PreToolUse", "Edit|Write|MultiEdit|apply_patch", "pre-write.js"],
   ["PreToolUse", "Bash", "pre-bash.js"],

@@ -154,8 +154,8 @@ Final ledger flush on clear/logout/exit, plus a one-line session summary in
 
 ## Codex topology and health checker
 
-Codex uses the generated current-project `.codex/hooks.json` surface: a
-`SessionStart` handler; `PreToolUse` and `PostToolUse` handlers for `Read`,
+Codex uses the generated current-project `.codex/hooks.json` surface: one
+`SessionStart` handler matching `startup|resume|clear|compact`; `PreToolUse` and `PostToolUse` handlers for `Read`,
 `Edit`/`Write`/`MultiEdit`/`apply_patch`, and `Bash`; then `PreCompact` and
 `Stop`. Its `PostToolUse` output is pass-through or advisory only: Codex does
 not use it to replace a tool result.

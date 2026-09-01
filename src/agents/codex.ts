@@ -25,7 +25,7 @@ function buildCodexHooks(projectRoot: string) {
   return {
     hooks: {
       SessionStart: [
-        { matcher: "startup|resume|clear", hooks: [hookEntry(projectRoot, "session-start.js", 5, "OpenWolf session bootstrap")] },
+        { matcher: "startup|resume|clear|compact", hooks: [hookEntry(projectRoot, "session-start.js", 5, "OpenWolf session bootstrap")] },
       ],
       PreToolUse: [
         { matcher: "Read", hooks: [hookEntry(projectRoot, "pre-read.js", 5, "OpenWolf read precheck")] },
