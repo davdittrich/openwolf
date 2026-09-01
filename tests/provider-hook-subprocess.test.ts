@@ -3,6 +3,7 @@ import * as assert from "node:assert";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
 import { shouldSuggestFilter } from "../src/hooks/bash-filter.ts";
 
@@ -62,6 +63,46 @@ function runPostBash(root: string, payload: string, provider: "claude" | "codex"
   });
 }
 
+function runPreRead(root: string, payload: string, provider: "claude" | "codex") {
+  const env = { ...process.env } as NodeJS.ProcessEnv;
+  delete env.CLAUDE_PROJECT_DIR;
+  delete env.CODEX_PROJECT_ROOT;
+  env[provider === "claude" ? "CLAUDE_PROJECT_DIR" : "CODEX_PROJECT_ROOT"] = root;
+  return spawnSync(process.execPath, [path.join(root, ".wolf", "hooks", "pre-read.js")], {
+    cwd: root,
+    encoding: "utf-8",
+    env,
+    input: payload,
+  });
+}
+
+function runCompiledDenialEncoder(provider: "claude" | "codex") {
+  const boundaryUrl = pathToFileURL(path.join(DIST_HOOKS, "provider-boundary.js")).href;
+  const script = `import { encodeProviderResponse } from ${JSON.stringify(boundaryUrl)}; process.stdout.write(encodeProviderResponse(${JSON.stringify(provider)}, { kind: "deny", reason: "blocked" }));`;
+  return spawnSync(process.execPath, ["--input-type=module", "--eval", script], { encoding: "utf-8" });
+}
+
+function duplicateReadFixture(root: string): string {
+  const filePath = path.join(root, "src", "a.ts");
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, "export const answer = 42;\n");
+  fs.mkdirSync(path.join(root, ".wolf", "hooks", "sessions"), { recursive: true });
+  fs.writeFileSync(path.join(root, ".wolf", "config.json"), JSON.stringify({ openwolf: { reads: { duplicate_mode: "deny" } } }));
+  fs.writeFileSync(path.join(root, ".wolf", "hooks", "sessions", "provider-session.json"), JSON.stringify({
+    session_id: "provider-session",
+    files_read: { "src/a.ts": { count: 1, tokens: 5, first_read: "2026-09-01T00:00:00.000Z", read_mtime: fs.statSync(filePath).mtimeMs } },
+    anatomy_hits: 0,
+    anatomy_misses: 0,
+    repeated_reads_warned: 0,
+  }));
+  return JSON.stringify({
+    hook_event_name: "PreToolUse",
+    tool_name: "Read",
+    session_id: "provider-session",
+    tool_input: { file_path: "src/a.ts" },
+  });
+}
+
 async function codexAdapter(): Promise<{ install: (ctx: unknown) => unknown }> {
   assert.ok(fs.existsSync(DIST_AGENTS), "run pnpm exec tsc before this test");
   const { resolveAgents } = await import(DIST_AGENTS);
@@ -74,6 +115,44 @@ function heartbeat(root: string, hook = "pre-bash"): Record<string, { consecutiv
 }
 
 describe("provider Bash boundary", () => {
+  test("compiled encoder writes exact shared denial bytes for Claude and Codex", () => {
+    const expected = '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"blocked"}}';
+    for (const provider of ["claude", "codex"] as const) {
+      const result = runCompiledDenialEncoder(provider);
+      assert.strictEqual(result.status, 0);
+      assert.strictEqual(result.stderr, "");
+      assert.strictEqual(result.stdout, expected);
+    }
+  });
+
+  test("compiled Claude pre-read emits the policy denial while Codex unknown authority passes through", () => {
+    const claudeRoot = tmpProject();
+    const codexRoot = tmpProject();
+    const expectedReason = "OpenWolf: a.ts was already read this session (~5 tok) and is unchanged on disk. Reuse your earlier read, or use offset/limit for the exact lines you need. If you do need the full file again, a second attempt will pass through.";
+    try {
+      installHooks(claudeRoot);
+      installHooks(codexRoot);
+      const claude = runPreRead(claudeRoot, duplicateReadFixture(claudeRoot), "claude");
+      const codex = runPreRead(codexRoot, duplicateReadFixture(codexRoot), "codex");
+      assert.strictEqual(claude.status, 0);
+      assert.strictEqual(claude.stderr, "");
+      assert.deepStrictEqual(JSON.parse(claude.stdout), {
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: expectedReason,
+        },
+      });
+      assert.strictEqual(codex.status, 0);
+      assert.strictEqual(codex.stdout, "");
+      assert.strictEqual(codex.stderr, "");
+      assert.ok(heartbeat(codexRoot, "pre-read").last_ok);
+    } finally {
+      fs.rmSync(claudeRoot, { recursive: true, force: true });
+      fs.rmSync(codexRoot, { recursive: true, force: true });
+    }
+  });
+
   test("encodes exact denial bytes and permits Claude-only PostToolUse replacement", async () => {
     const { encodeProviderResponse } = await import("../src/hooks/provider-boundary.ts");
     const expected = '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"blocked"}}';
