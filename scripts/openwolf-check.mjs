@@ -10,6 +10,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { parseCodexHooksFeature } from "../dist/src/agents/codex-config.js";
 import { spawnSync } from "node:child_process";
 
 const args = process.argv.slice(2);
@@ -62,8 +63,23 @@ report.skills = ["security-audit", "reframe"].filter((s) => exists(path.join(roo
 
 function configuredClaude() {
   const parsed = readJson(path.join(root, ".claude", "settings.json"));
-  return parsed !== null && typeof parsed === "object" && JSON.stringify(parsed).includes(".wolf/hooks/");
+  return hasGeneratedHookSurface(parsed, claudeHookSurface);
 }
+
+const claudeHookSurface = [
+  ["SessionStart", "", "session-start.js"],
+  ["UserPromptSubmit", "", "user-prompt-submit.js"],
+  ["PreToolUse", "Read", "pre-read.js"],
+  ["PreToolUse", "Write|Edit|MultiEdit", "pre-write.js"],
+  ["PreToolUse", "Bash", "pre-bash.js"],
+  ["PostToolUse", "Read", "post-read.js"],
+  ["PostToolUse", "Write|Edit|MultiEdit", "post-write.js"],
+  ["PostToolUse", "Bash", "post-bash.js"],
+  ["PostToolBatch", "", "post-batch.js"],
+  ["PreCompact", "", "precompact.js"],
+  ["Stop", "", "stop.js"],
+  ["SessionEnd", "", "session-end.js"],
+];
 
 const codexHookSurface = [
   ["SessionStart", "startup|resume|clear", "session-start.js"],
@@ -79,30 +95,21 @@ const codexHookSurface = [
 
 function configuredCodex() {
   const parsed = readJson(path.join(root, ".codex", "hooks.json"));
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed) ||
-    parsed.hooks === null || typeof parsed.hooks !== "object" || Array.isArray(parsed.hooks)) return false;
-
   const configPath = path.join(root, ".codex", "config.toml");
   const config = read(configPath);
   if (exists(configPath) && config === null) return false;
-  const feature = (config ?? "").split(/\r?\n/).reduce((state, line) => {
-    if (!state.valid) return state;
-    const source = line.replace(/\s+#.*$/, "");
-    const heading = source.match(/^\s*\[([\w-]+)\]\s*$/);
-    if (heading) return { ...state, section: heading[1] };
-    if (source.trim().startsWith("[")) return { ...state, valid: false };
-    const hooks = state.section === "features" && source.match(/^\s*hooks\s*=\s*(.*?)\s*$/);
-    if (!hooks) return state;
-    if (state.seen || (hooks[1] !== "true" && hooks[1] !== "false")) return { ...state, valid: false };
-    return { ...state, seen: true, enabled: hooks[1] !== "false" };
-  }, { section: "", enabled: true, seen: false, valid: true });
-  if (!feature.valid || !feature.enabled) return false;
+  return parseCodexHooksFeature(config) === "enabled" && hasGeneratedHookSurface(parsed, codexHookSurface);
+}
 
-  return codexHookSurface.every(([event, matcher, script]) =>
+function hasGeneratedHookSurface(parsed, surface) {
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed) ||
+    parsed.hooks === null || typeof parsed.hooks !== "object" || Array.isArray(parsed.hooks)) return false;
+  const projectRoot = root.replace(/\\/g, "/").replace(/\/+$/, "");
+  return surface.every(([event, matcher, script]) =>
     Array.isArray(parsed.hooks[event]) && parsed.hooks[event].some((entry) =>
       entry && typeof entry === "object" && entry.matcher === matcher && Array.isArray(entry.hooks) &&
       entry.hooks.some((handler) => handler && typeof handler === "object" &&
-        handler.type === "command" && handler.command === `node "${path.join(root, ".wolf", "hooks", script)}"`)));
+        handler.type === "command" && handler.command === `node "${projectRoot}/.wolf/hooks/${script}"`)));
 }
 
 function selfcheck(hooks, diagnostic) {

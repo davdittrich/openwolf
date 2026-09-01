@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { parseCodexHooksFeature } from "./codex-config.js";
 import { upsertMarkerBlock } from "./markers.js";
 import { readSnippet } from "./index.js";
 import type { AgentAdapter, AgentInstallContext, AgentInstallResult } from "./types.js";
@@ -124,17 +125,22 @@ export const codexAdapter: AgentAdapter = {
       actions.push("Codex hooks registered (.codex/hooks.json)");
     }
 
-    // 2. Enable the hooks feature — but never corrupt an existing config.toml.
+    // 2. Hooks are default-on. Inspect an existing config without changing its
+    // user-owned bytes; only an explicit disable or ambiguity needs a warning.
     const configPath = path.join(codexDir, "config.toml");
-    if (!fs.existsSync(configPath)) {
-      fs.writeFileSync(configPath, "[features]\nhooks = true\n", "utf-8");
-      actions.push("Codex hooks feature enabled (.codex/config.toml)");
-    } else {
-      const existing = fs.readFileSync(configPath, "utf-8");
-      // Anchored: the old /hooks\s*=\s*true/ also matched "webhooks = true"
-      // or a commented "# hooks = true" and suppressed the warning.
-      if (!/^\s*hooks\s*=\s*true\s*$/m.test(existing)) {
-        warnings.push('add "hooks = true" under [features] in .codex/config.toml');
+    if (fs.existsSync(configPath)) {
+      let existing: string;
+      try {
+        existing = fs.readFileSync(configPath, "utf-8");
+      } catch {
+        warnings.push(".codex/config.toml could not be read; OpenWolf left it untouched and cannot confirm Codex hooks are enabled.");
+        existing = "";
+      }
+      const feature = parseCodexHooksFeature(existing);
+      if (feature === "disabled") {
+        warnings.push('Codex hooks are explicitly disabled in .codex/config.toml; set [features] hooks = true to enable them.');
+      } else if (feature === "ambiguous") {
+        warnings.push(".codex/config.toml has an ambiguous [features] hooks setting; OpenWolf left it untouched and cannot confirm Codex hooks are enabled.");
       }
     }
 
