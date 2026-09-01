@@ -92,6 +92,45 @@ describe("provider hook boundary", () => {
     }
   });
 
+  test("derives Codex subagent authority only from a non-whitespace agent_id", async () => {
+    const { decodeProviderHook } = await import("../src/hooks/provider-boundary.ts");
+    const root = projectRoot();
+    const codexRead = (identity: Record<string, unknown>) => decodeProviderHook("codex", JSON.stringify({
+      hook_event_name: "PreToolUse",
+      tool_name: "Read",
+      session_id: "session-1",
+      turn_id: "turn-1",
+      tool_input: { file_path: "src/a.ts" },
+      ...identity,
+    }), root);
+    try {
+      const read = codexRead({ agent_id: "agent-1" });
+      const bash = decodeProviderHook("codex", JSON.stringify({
+        hook_event_name: "PreToolUse",
+        tool_name: "Bash",
+        session_id: "session-1",
+        turn_id: "turn-1",
+        agent_id: "agent-1",
+        tool_input: { command: "pnpm test" },
+      }), root);
+      assert.strictEqual(read?.isSubagent, true);
+      assert.strictEqual(bash?.isSubagent, true);
+      for (const identity of [
+        {},
+        { agent_id: "" },
+        { agent_id: " \t" },
+        { agent_id: null },
+        { agent_id: 1 },
+        { agent_id: {} },
+        { agent_type: "worker" },
+      ]) {
+        assert.strictEqual(codexRead(identity)?.isSubagent, "unknown", JSON.stringify(identity));
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("rejects the whole patch set for malformed, unsupported, duplicate-normalized, or external paths", async () => {
     const { extractAffectedPatchPaths } = await import("../src/hooks/provider-boundary.ts");
     const root = projectRoot();

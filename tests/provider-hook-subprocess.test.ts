@@ -125,15 +125,23 @@ describe("provider Bash boundary", () => {
     }
   });
 
-  test("compiled Claude pre-read emits the policy denial while Codex unknown authority passes through", () => {
+  test("compiled Claude pre-read denies while Codex identity preserves proven/unknown authority", () => {
     const claudeRoot = tmpProject();
     const codexRoot = tmpProject();
+    const codexSubagentRoot = tmpProject();
     const expectedReason = "OpenWolf: a.ts was already read this session (~5 tok) and is unchanged on disk. Reuse your earlier read, or use offset/limit for the exact lines you need. If you do need the full file again, a second attempt will pass through.";
     try {
       installHooks(claudeRoot);
       installHooks(codexRoot);
+      installHooks(codexSubagentRoot);
       const claude = runPreRead(claudeRoot, duplicateReadFixture(claudeRoot), "claude");
-      const codex = runPreRead(codexRoot, duplicateReadFixture(codexRoot), "codex");
+      const codexPayload = duplicateReadFixture(codexRoot);
+      const codexSession = path.join(codexRoot, ".wolf", "hooks", "sessions", "provider-session.json");
+      const codexBefore = fs.readFileSync(codexSession, "utf-8");
+      const codex = runPreRead(codexRoot, codexPayload, "codex");
+      const codexSubagentPayload = JSON.parse(duplicateReadFixture(codexSubagentRoot));
+      codexSubagentPayload.agent_id = "agent-1";
+      const codexSubagent = runPreRead(codexSubagentRoot, JSON.stringify(codexSubagentPayload), "codex");
       assert.strictEqual(claude.status, 0);
       assert.strictEqual(claude.stderr, "");
       assert.deepStrictEqual(JSON.parse(claude.stdout), {
@@ -147,9 +155,15 @@ describe("provider Bash boundary", () => {
       assert.strictEqual(codex.stdout, "");
       assert.strictEqual(codex.stderr, "");
       assert.ok(heartbeat(codexRoot, "pre-read").last_ok);
+      assert.strictEqual(fs.readFileSync(codexSession, "utf-8"), codexBefore);
+      assert.strictEqual(codexSubagent.status, 0);
+      assert.strictEqual(codexSubagent.stderr, "");
+      assert.doesNotMatch(codexSubagent.stdout, /permissionDecision/);
+      assert.ok(heartbeat(codexSubagentRoot, "pre-read").last_ok);
     } finally {
       fs.rmSync(claudeRoot, { recursive: true, force: true });
       fs.rmSync(codexRoot, { recursive: true, force: true });
+      fs.rmSync(codexSubagentRoot, { recursive: true, force: true });
     }
   });
 
