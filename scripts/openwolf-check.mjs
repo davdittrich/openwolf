@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
- * openwolf-check — standalone, zero-dependency, read-only.
+ * openwolf-check — standalone, read-only installed-package checker.
  *
  * Run from a project root (or pass a path) to see whether OpenWolf is
  * installed there, which agents are wired, when it was last used, and what
- * it did. Works without OpenWolf installed — it only reads files.
+ * it did. It only reads project files, while importing this package's compiled
+ * Codex configuration authority and its declared production runtime dependencies.
  *
  *   node openwolf-check.mjs [projectDir] [--json] [--selfcheck]
  */

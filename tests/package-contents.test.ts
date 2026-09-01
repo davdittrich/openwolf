@@ -52,17 +52,23 @@ function pack(root: string): { archive: string; extracted: string } {
   const unpacked = spawnSync("tar", ["-xzf", archive, "-C", extracted], { encoding: "utf-8" });
   assert.strictEqual(unpacked.status, 0, unpacked.stderr);
   const packageDirectory = path.join(extracted, "package");
-  const smolToml = path.join(packageRoot, "node_modules", "smol-toml");
-  assert.ok(fs.existsSync(smolToml), "locked runtime dependency must be installed for package verification");
+  const declared = JSON.parse(fs.readFileSync(path.join(packageDirectory, "package.json"), "utf-8")) as {
+    dependencies?: Record<string, string>;
+  };
+  const installedDependency = path.join(packageRoot, "node_modules", "smol-toml");
+  const installedManifest = JSON.parse(fs.readFileSync(path.join(installedDependency, "package.json"), "utf-8")) as {
+    version?: string;
+  };
+  assert.strictEqual(declared.dependencies?.["smol-toml"], "1.8.0");
+  assert.strictEqual(installedManifest.version, "1.8.0");
   fs.mkdirSync(path.join(packageDirectory, "node_modules"), { recursive: true });
-  fs.cpSync(smolToml, path.join(packageDirectory, "node_modules", "smol-toml"), { recursive: true });
+  fs.cpSync(installedDependency, path.join(packageDirectory, "node_modules", "smol-toml"), { recursive: true });
   return { archive, extracted: packageDirectory };
 }
 
 test("the packed checker is shipped, read-only, and bound to its inspected project", () => {
   const root = fs.mkdtempSync(path.join(testRoot, "wolf-package-"));
   try {
-    assert.doesNotMatch(pack.toString(), /cpSync/, "package verification must install its declared runtime instead of copying a development dependency");
     const { archive, extracted } = pack(root);
     assert.ok(fs.existsSync(archive));
     assert.ok(

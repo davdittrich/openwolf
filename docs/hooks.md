@@ -167,7 +167,10 @@ or conflicting values fail closed for checking, while installation preserves
 the existing config bytes.
 
 Run `node scripts/openwolf-check.mjs [project-directory] --json` to inspect
-the current project without executing project hook code. `--selfcheck` opts
+the current project without executing project hook code. The checker is
+read-only: it imports OpenWolf's compiled Codex configuration authority and its
+declared production runtime dependencies from the installed package, never from
+the inspected project. `--selfcheck` opts
 into the bounded canonical-script check. The evidence states are `configured`,
 `self-tested`, `active`, `unknown`, and `failed`; only an observed provider
 receipt can make health `active`.
