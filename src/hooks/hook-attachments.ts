@@ -1,4 +1,6 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { HookProvider } from "./provider-boundary.js";
 import type { LegacyDeliveryEvidence, ProviderDeliveryEvidence } from "./ledger-math.js";
 
@@ -45,14 +47,34 @@ interface AttachmentRecord {
   stderr?: string;
 }
 
-function isOpenWolfCommand(command: string | undefined): boolean {
-  return typeof command === "string" && command.includes(".wolf/hooks/");
+const HOOK_ENTRY_FILES = new Set([
+  "session-start.js", "user-prompt-submit.js", "pre-read.js", "pre-write.js", "pre-bash.js",
+  "post-read.js", "post-write.js", "post-bash.js", "post-batch.js", "precompact.js", "stop.js", "session-end.js",
+]);
+
+function projectDirFromScriptLocation(): string | null {
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const root = path.resolve(here, "..", "..");
+  return path.basename(here) === "hooks" && path.basename(path.dirname(here)) === ".wolf" && fs.existsSync(path.join(root, ".wolf")) ? root : null;
 }
 
-/** The hook script name out of the registered command, e.g. "pre-read.js". */
-function hookFileOf(command: string): string {
-  const m = command.match(/\.wolf\/hooks\/([\w.-]+\.js)/);
-  return m ? m[1] : command.slice(0, 60);
+function currentProjectDir(): string {
+  return process.env.CLAUDE_PROJECT_DIR || process.env.CODEX_PROJECT_ROOT || process.env.OPENWOLF_PROJECT_ROOT || projectDirFromScriptLocation() || process.cwd();
+}
+
+/** Return the allowed current-project hook file named by an attachment command. */
+function hookFileOf(command: string | undefined): string | null {
+  const match = typeof command === "string" ? command.match(/^node\s+(?:"([^"]+)"|'([^']+)'|(\S+))$/) : null;
+  const candidate = match?.[1] ?? match?.[2] ?? match?.[3];
+  if (!candidate || candidate.split(/[\\/]+/).includes("..")) return null;
+
+  const root = path.resolve(currentProjectDir());
+  const hookDir = path.join(root, ".wolf", "hooks");
+  const resolved = candidate.startsWith("$CLAUDE_PROJECT_DIR/")
+    ? path.resolve(root, candidate.slice("$CLAUDE_PROJECT_DIR/".length))
+    : path.resolve(candidate);
+  const file = path.basename(resolved);
+  return HOOK_ENTRY_FILES.has(file) && resolved === path.join(hookDir, file) ? file : null;
 }
 
 /**
@@ -124,9 +146,9 @@ function readHookDelivery(transcriptPath: string): HookVerification | null {
 
   for (const att of records) {
     const isHookRecord = att.type === "hook_success" || att.type === "hook_non_blocking_error" || att.type === "hook_failure";
-    if (!isHookRecord || !isOpenWolfCommand(att.command)) continue;
+    const hook = isHookRecord ? hookFileOf(att.command) : null;
+    if (!hook) continue;
 
-    const hook = hookFileOf(att.command!);
     const entry = result.per_hook[hook] ?? (result.per_hook[hook] = { fired: 0, failed: 0, last_exit: 0 });
     result.hooks_fired++;
     entry.fired++;
