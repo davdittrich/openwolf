@@ -231,6 +231,7 @@ function recordPostWrite(
   // 3. Record in session tracker + track edit counts
   try {
     const normalizedFile = normalizePath(filePath);
+    const readKey = normalizePath(absolutePath);
     const action = toolName === "Write" ? "create" : "edit";
     const fileContent = input.tool_input?.content ?? "";
     const tokens = estimateTokens(fileContent || newStr, "code");
@@ -253,8 +254,8 @@ function recordPostWrite(
 
       session.edit_counts[editKey] = (session.edit_counts[editKey] || 0) + 1;
 
-      if (session.files_read && session.files_read[normalizedFile]) {
-        delete session.files_read[normalizedFile];
+      if (session.files_read && session.files_read[readKey]) {
+        delete session.files_read[readKey];
       }
 
       // Once per file per session: firing on the 3rd edit AND every edit after
