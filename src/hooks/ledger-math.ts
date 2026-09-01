@@ -70,11 +70,78 @@ export type ProviderDeliveryEvidence =
 export type StoredDeliveryEvidence = LegacyDeliveryEvidence | ProviderDeliveryEvidence;
 
 /** Return only receipt-confirmed evidence; unknown is intentionally excluded. */
+function hasValidDeliveryCounters(value: unknown): value is LegacyDeliveryEvidence {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const evidence = value as Record<string, unknown>;
+  const whole = (candidate: unknown): candidate is number =>
+    Number.isSafeInteger(candidate) && (candidate as number) >= 0;
+  const hooksFired = evidence.hooks_fired;
+  const hooksFailed = evidence.hooks_failed;
+  const injectionsDelivered = evidence.injections_delivered;
+  const injectionTokensDelivered = evidence.injection_tokens_delivered;
+  if (!whole(hooksFired) || hooksFired === 0 || !whole(hooksFailed) || hooksFailed > hooksFired ||
+      !whole(injectionsDelivered) || injectionsDelivered > hooksFired ||
+      !whole(injectionTokensDelivered) ||
+      (injectionsDelivered === 0) !== (injectionTokensDelivered === 0) ||
+      !evidence.per_hook || typeof evidence.per_hook !== "object" || Array.isArray(evidence.per_hook)) {
+    return false;
+  }
+
+  const perHook = evidence.per_hook as Record<string, unknown>;
+  const entries = Object.entries(perHook);
+  if (entries.length === 0 || !entries.every(([, raw]) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+    const entry = raw as Record<string, unknown>;
+    return whole(entry.fired) && entry.fired > 0 &&
+      whole(entry.failed) && entry.failed <= entry.fired &&
+      whole(entry.last_exit) && (entry.last_exit === 0 || entry.failed > 0);
+  })) return false;
+
+  const totals = entries.reduce(
+    (sum, [, raw]) => {
+      const entry = raw as Record<string, number>;
+      return { fired: sum.fired + entry.fired, failed: sum.failed + entry.failed };
+    },
+    { fired: 0, failed: 0 },
+  );
+  if (totals.fired !== hooksFired || totals.failed !== hooksFailed) return false;
+
+  const hasLastFailure = Object.prototype.hasOwnProperty.call(evidence, "last_failure");
+  if ((hooksFailed > 0) !== hasLastFailure) return false;
+  if (hasLastFailure) {
+    const failure = evidence.last_failure;
+    if (!failure || typeof failure !== "object" || Array.isArray(failure)) return false;
+    const { hook, stderr_head } = failure as Record<string, unknown>;
+    const failedHook = typeof hook === "string" ? perHook[hook] as Record<string, unknown> | undefined : undefined;
+    if (!failedHook || !whole(failedHook.failed) || failedHook.failed === 0 ||
+        typeof stderr_head !== "string" || stderr_head.length > 200) return false;
+  }
+  return true;
+}
+
 export function summarizeVerifiedDelivery(
   evidence: StoredDeliveryEvidence | undefined,
 ): LegacyDeliveryEvidence | null {
-  if (!evidence) return null;
-  if ("status" in evidence && evidence.status === "unknown") return null;
+  if (!hasValidDeliveryCounters(evidence)) return null;
+
+  const tagged = evidence as LegacyDeliveryEvidence & Partial<{
+    provider: HookProvider;
+    status: "confirmed" | "failed" | "unknown";
+    variant: "claude_attachment" | "unavailable";
+  }>;
+  const hasProvider = "provider" in tagged;
+  const hasStatus = "status" in tagged;
+  const hasVariant = "variant" in tagged;
+  if (hasProvider || hasStatus || hasVariant) {
+    if (!hasProvider || !hasStatus || !hasVariant ||
+        tagged.provider !== "claude" || tagged.variant !== "claude_attachment" ||
+        (tagged.status !== "confirmed" && tagged.status !== "failed") ||
+        (tagged.status === "confirmed" && tagged.hooks_failed !== 0) ||
+        (tagged.status === "failed" && tagged.hooks_failed === 0)) {
+      return null;
+    }
+  }
+
   const {
     hooks_fired,
     hooks_failed,

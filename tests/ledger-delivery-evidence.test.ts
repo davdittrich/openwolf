@@ -9,6 +9,7 @@ const counters = {
   injections_delivered: 2,
   injection_tokens_delivered: 25,
   per_hook: { "post-write.js": { fired: 3, failed: 1, last_exit: 1 } },
+  last_failure: { hook: "post-write.js", stderr_head: "fixture failure" },
 };
 
 describe("summarizeVerifiedDelivery", () => {
@@ -17,9 +18,12 @@ describe("summarizeVerifiedDelivery", () => {
   });
 
   test("includes confirmed and failed Claude provider receipts", () => {
+    const { last_failure: _lastFailure, ...confirmedCounters } = counters;
+    confirmedCounters.hooks_failed = 0;
+    confirmedCounters.per_hook = { "post-write.js": { fired: 3, failed: 0, last_exit: 0 } };
     assert.deepStrictEqual(
-      summarizeVerifiedDelivery({ ...counters, provider: "claude", status: "confirmed", variant: "claude_attachment" }),
-      counters,
+      summarizeVerifiedDelivery({ ...confirmedCounters, provider: "claude", status: "confirmed", variant: "claude_attachment" }),
+      confirmedCounters,
     );
     assert.deepStrictEqual(
       summarizeVerifiedDelivery({ ...counters, provider: "claude", status: "failed", variant: "claude_attachment" }),
