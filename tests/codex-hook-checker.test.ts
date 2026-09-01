@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 
 const DIST_AGENTS = path.resolve(import.meta.dirname, "..", "dist", "src", "agents", "index.js");
 const CHECK = path.resolve(import.meta.dirname, "..", "scripts", "openwolf-check.mjs");
+const DIST_HOOKS = path.resolve(import.meta.dirname, "..", "dist", "hooks");
 
 async function codexAdapter(): Promise<{ install: (ctx: { projectRoot: string; templatesDir: string }) => unknown }> {
   const { resolveAgents } = await import(DIST_AGENTS);
@@ -39,11 +40,13 @@ describe("installed Codex hook checker contract", () => {
       const hooksPath = path.join(root, ".codex", "hooks.json");
       const installed = JSON.parse(fs.readFileSync(hooksPath, "utf-8"));
       assert.strictEqual(check(root), true);
+      assert.strictEqual(entry(installed, "session-start.js").candidate.matcher, "startup|resume|clear|compact");
       assert.ok(JSON.stringify(installed.hooks.Custom).includes("echo user"), "user entry preserved");
 
       const mutations: Array<[string, (value: typeof installed) => void]> = [
         ["event", (value) => { value.hooks.SessionStart = []; }],
         ["matcher", (value) => { entry(value, "session-start.js").candidate.matcher = "wrong"; }],
+        ["compact", (value) => { entry(value, "session-start.js").candidate.matcher = "startup|resume|clear"; }],
         ["type", (value) => { entry(value, "stop.js").hook.type = "mcp_tool"; }],
         ["project root", (value) => { const hook = entry(value, "session-start.js").hook; hook.command = hook.command.replace(root, `${root}-foreign`); }],
         ["pre-Bash", (value) => { entry(value, "pre-bash.js").candidate.matcher = "Read"; }],
@@ -55,6 +58,31 @@ describe("installed Codex hook checker contract", () => {
         fs.writeFileSync(hooksPath, JSON.stringify(mutated), "utf-8");
         assert.strictEqual(check(root), false, name);
       }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("compiled SessionStart reinjects persisted state after compact", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "ow-codex-compact-"));
+    try {
+      const hooksDir = path.join(root, ".wolf", "hooks");
+      fs.cpSync(DIST_HOOKS, hooksDir, { recursive: true });
+      fs.writeFileSync(path.join(root, ".wolf", "config.json"), JSON.stringify({ openwolf: { context: { session_digest_budget_tokens: 1 } } }), "utf-8");
+      fs.mkdirSync(path.join(hooksDir, "sessions"), { recursive: true });
+      fs.writeFileSync(path.join(hooksDir, "sessions", "compact-session.json"), JSON.stringify({ files_written: [{ file: "src/already-touched.ts" }], files_read: {}, edit_counts: {} }), "utf-8");
+
+      const result = spawnSync(process.execPath, [path.join(hooksDir, "session-start.js")], {
+        cwd: root,
+        env: { ...process.env, OPENWOLF_PROJECT_ROOT: root },
+        input: JSON.stringify({ source: "compact", session_id: "compact-session" }),
+        encoding: "utf-8",
+      });
+      assert.strictEqual(result.status, 0, result.stderr);
+      const output = JSON.parse(result.stdout);
+      assert.strictEqual(output.hookSpecificOutput.hookEventName, "SessionStart");
+      assert.match(output.hookSpecificOutput.additionalContext, /context was just compacted/);
+      assert.match(output.hookSpecificOutput.additionalContext, /src\/already-touched\.ts/);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
