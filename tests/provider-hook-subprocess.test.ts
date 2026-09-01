@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import { shouldSuggestFilter } from "../src/hooks/bash-filter.ts";
 
 const DIST_HOOKS = path.resolve(import.meta.dirname, "..", "dist", "hooks");
+const DIST_AGENTS = path.resolve(import.meta.dirname, "..", "dist", "src", "agents", "index.js");
 const TEST_TMPDIR = process.env.OPENWOLF_TEST_TMPDIR ?? "/dev/shm";
 
 const claudeBash = {
@@ -49,11 +50,95 @@ function runHook(root: string, payload: string, provider: "claude" | "codex") {
   });
 }
 
+function runPostBash(root: string, payload: string, provider: "claude" | "codex") {
+  const env = { ...process.env } as NodeJS.ProcessEnv;
+  delete env.CLAUDE_PROJECT_DIR;
+  delete env.CODEX_PROJECT_ROOT;
+  env[provider === "claude" ? "CLAUDE_PROJECT_DIR" : "CODEX_PROJECT_ROOT"] = root;
+  return spawnSync(process.execPath, [path.join(root, ".wolf", "hooks", "post-bash.js")], {
+    encoding: "utf-8",
+    env,
+    input: payload,
+  });
+}
+
+async function codexAdapter(): Promise<{ install: (ctx: unknown) => unknown }> {
+  assert.ok(fs.existsSync(DIST_AGENTS), "run pnpm exec tsc before this test");
+  const { resolveAgents } = await import(DIST_AGENTS);
+  const [adapter] = resolveAgents(["codex"]);
+  return adapter;
+}
+
 function heartbeat(root: string, hook = "pre-bash"): Record<string, { consecutive_failures: number; last_ok?: string; last_error?: string }> {
   return JSON.parse(fs.readFileSync(path.join(root, ".wolf", "hooks", "_heartbeat.json"), "utf-8"))[hook];
 }
 
 describe("provider Bash boundary", () => {
+  test("encodes exact denial bytes and permits Claude-only PostToolUse replacement", async () => {
+    const { encodeProviderResponse } = await import("../src/hooks/provider-boundary.ts");
+    const expected = '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"blocked"}}';
+    assert.strictEqual(encodeProviderResponse("claude", { kind: "deny", reason: "blocked" }), expected);
+    assert.strictEqual(encodeProviderResponse("codex", { kind: "deny", reason: "blocked" }), expected);
+
+    const response = { stdout: "short", stderr: "", exitCode: 0 };
+    assert.deepStrictEqual(
+      JSON.parse(encodeProviderResponse("claude", { kind: "replace", toolResponse: response })),
+      { hookSpecificOutput: { hookEventName: "PostToolUse", updatedToolOutput: response } },
+    );
+    assert.strictEqual(encodeProviderResponse("codex", { kind: "replace", toolResponse: response }), "");
+  });
+
+  test("compiled PostToolUse preserves Claude result shape and keeps Codex replacement-only pass-through", () => {
+    const claudeRoot = tmpProject();
+    const codexRoot = tmpProject();
+    const stdout = Array.from({ length: 600 }, (_, index) => `line ${index}`).join("\n");
+    const payload = JSON.stringify({
+      hook_event_name: "PostToolUse",
+      tool_name: "Bash",
+      session_id: "provider-session",
+      tool_use_id: "bash-1",
+      tool_input: { command: "pnpm test" },
+      tool_response: { stdout, stderr: "", exitCode: 0 },
+    });
+    const config = JSON.stringify({ openwolf: { bash: { governor: { mode: "replace", threshold_tokens: 1, families: { test: "replace" } } } } });
+    try {
+      installHooks(claudeRoot);
+      installHooks(codexRoot);
+      fs.writeFileSync(path.join(claudeRoot, ".wolf", "config.json"), config);
+      fs.writeFileSync(path.join(codexRoot, ".wolf", "config.json"), config);
+      const claude = runPostBash(claudeRoot, payload, "claude");
+      const codex = runPostBash(codexRoot, payload, "codex");
+      assert.strictEqual(claude.status, 0);
+      assert.strictEqual(codex.status, 0);
+      assert.strictEqual(claude.stderr, "");
+      assert.strictEqual(codex.stderr, "");
+      const claudeOutput = JSON.parse(claude.stdout);
+      assert.deepStrictEqual(Object.keys(claudeOutput.hookSpecificOutput.updatedToolOutput), ["stdout", "stderr", "exitCode"]);
+      assert.notStrictEqual(claudeOutput.hookSpecificOutput.updatedToolOutput.stdout, stdout);
+      assert.strictEqual(codex.stdout, "");
+    } finally {
+      fs.rmSync(claudeRoot, { recursive: true, force: true });
+      fs.rmSync(codexRoot, { recursive: true, force: true });
+    }
+  });
+
+  test("installs one Codex Bash PostToolUse hook", async () => {
+    const adapter = await codexAdapter();
+    const root = tmpProject();
+    const templatesDir = path.join(root, "templates");
+    fs.mkdirSync(templatesDir);
+    try {
+      adapter.install({ projectRoot: root, templatesDir });
+      adapter.install({ projectRoot: root, templatesDir });
+      const installed = JSON.parse(fs.readFileSync(path.join(root, ".codex", "hooks.json"), "utf-8"));
+      const bashEntries = installed.hooks.PostToolUse.filter((entry: { matcher?: string }) => entry.matcher === "Bash");
+      assert.strictEqual(bashEntries.length, 1);
+      assert.match(bashEntries[0].hooks[0].command, /\.wolf\/hooks\/post-bash\.js/);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("normalizes Claude and Codex Bash fixtures before the shared policy", async () => {
     const { decodeProviderHook } = await import("../src/hooks/provider-boundary.ts");
     const root = tmpProject();
