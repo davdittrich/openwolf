@@ -72,6 +72,35 @@ describe("openwolf-check provider evidence", () => {
     });
   });
 
+  test("confirmed receipts retain authority through selfchecks while newer explicit evidence controls failure and recovery", () => {
+    const active = project((dir) => {
+      codexConfig(dir);
+      receipts(dir, [{ ended: "2000-01-01T00:00:00Z", status: "confirmed", provider: "codex" }]);
+      const hooks = path.join(dir, ".wolf", "hooks");
+      fs.mkdirSync(hooks, { recursive: true });
+      fs.writeFileSync(path.join(hooks, "session-start.js"), "process.exit(0);", "utf-8");
+    }, run).providers.codex;
+    assert.deepStrictEqual(active, { configured: true, self_tested: true, receipt: "confirmed", health: "active" });
+
+    const selfcheckFailure = project((dir) => {
+      codexConfig(dir);
+      receipts(dir, [{ ended: "2000-01-01T00:00:00Z", status: "confirmed", provider: "codex" }]);
+      const hooks = path.join(dir, ".wolf", "hooks");
+      fs.mkdirSync(hooks, { recursive: true });
+      fs.writeFileSync(path.join(hooks, "session-start.js"), "process.exit(1);", "utf-8");
+    }, run).providers.codex;
+    assert.strictEqual(selfcheckFailure.health, "failed");
+
+    const recovered = project((dir) => {
+      codexConfig(dir);
+      receipts(dir, [
+        { ended: "2000-01-01T00:00:00Z", status: "failed", provider: "codex" },
+        { ended: "2000-01-01T01:00:00Z", status: "confirmed", provider: "codex" },
+      ]);
+    }, run).providers.codex;
+    assert.strictEqual(recovered.health, "active");
+  });
+
   test("only confirmed receipt is active and failure is not erased", () => {
     assert.strictEqual(project((dir) => { codexConfig(dir); receipt(dir, "confirmed"); }, run).providers.claude.health, "active");
     const failed = project((dir) => { codexConfig(dir); receipt(dir, "failed"); }, run).providers;

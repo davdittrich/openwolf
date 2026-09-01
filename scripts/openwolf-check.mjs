@@ -123,9 +123,11 @@ function providerReport(provider, configured, selfTest, ledger) {
     at: selfTestAt,
     diagnostic: selfTest.diagnostic,
   };
-  const latest = selfTestObservation
-    ? latestObservation(receiptObservation, selfTestObservation)
-    : receiptObservation;
+  const latest = selfTestObservation?.status === "self-tested" && receiptObservation?.status === "confirmed"
+    ? receiptObservation
+    : selfTestObservation
+      ? latestObservation(receiptObservation, selfTestObservation)
+      : receiptObservation;
   const health = latest?.status ?? "unknown";
   return {
     configured,
