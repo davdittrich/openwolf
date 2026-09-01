@@ -221,6 +221,40 @@ describe("provider Bash boundary", () => {
     }
   });
 
+
+  test("compiled Codex apply_patch sends its normalized command through existing pre-write policy", () => {
+    const root = tmpProject();
+    const command = [
+      "*** Begin Patch",
+      "*** Update File: src/a.ts",
+      "+// patch-signature",
+      "*** End Patch",
+    ].join("\n");
+    try {
+      installHooks(root);
+      fs.writeFileSync(path.join(root, ".wolf", "cerebrum.md"), "## Do-Not-Repeat\n\n- never use \`patch-signature\`\n");
+      const env = { ...process.env, CODEX_PROJECT_ROOT: root };
+      const result = spawnSync(process.execPath, [path.join(root, ".wolf", "hooks", "pre-write.js")], {
+        input: JSON.stringify({
+          hook_event_name: "PreToolUse",
+          tool_name: "apply_patch",
+          session_id: "patch-policy",
+          tool_input: { command },
+        }),
+        encoding: "utf-8",
+        env,
+      });
+      assert.strictEqual(result.status, 0);
+      assert.strictEqual(result.stderr, "");
+      const output = JSON.parse(result.stdout);
+      assert.match(output.hookSpecificOutput.additionalContext, /patch-signature/);
+      const session = JSON.parse(fs.readFileSync(path.join(root, ".wolf", "hooks", "sessions", "patch-policy.json"), "utf-8"));
+      assert.strictEqual(session.injections.filter((entry: { type: string }) => entry.type === "cerebrum_buglog").length, 1);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("installs one Codex Bash PostToolUse hook", async () => {
     const adapter = await codexAdapter();
     const root = tmpProject();

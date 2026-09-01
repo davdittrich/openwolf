@@ -92,6 +92,33 @@ describe("provider hook boundary", () => {
     }
   });
 
+
+  test("normalizes Codex PostToolUse Bash into the shared command handoff", async () => {
+    const { decodeProviderHook } = await import("../src/hooks/provider-boundary.ts");
+    const root = projectRoot();
+    try {
+      const event = decodeProviderHook("codex", JSON.stringify({
+        hook_event_name: "PostToolUse",
+        tool_name: "Bash",
+        session_id: "session-1",
+        turn_id: "turn-18",
+        tool_input: { command: "cat src/a.ts" },
+      }), root);
+      assert.deepStrictEqual(event, {
+        provider: "codex",
+        eventName: "PostToolUse",
+        toolName: "Bash",
+        command: "cat src/a.ts",
+        sessionId: "session-1",
+        projectRoot: root,
+        isSubagent: "unknown",
+        variant: { turnId: "turn-18" },
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("derives Codex subagent authority only from a non-whitespace agent_id", async () => {
     const { decodeProviderHook } = await import("../src/hooks/provider-boundary.ts");
     const root = projectRoot();
@@ -217,6 +244,35 @@ describe("provider hook boundary", () => {
         assert.ok(!fs.existsSync(path.join(root, ".wolf", "anatomy.md")), command);
         assert.ok(!fs.existsSync(path.join(root, ".wolf", "memory.md")), command);
         assert.ok(!fs.existsSync(path.join(root, ".wolf", "hooks", "sessions", "malformed-patch.json")), command);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+
+  test("keeps empty ordinary Codex write paths out of compiled post-write bookkeeping", () => {
+    assert.ok(fs.existsSync(path.join(DIST_HOOKS, "post-write.js")), "run pnpm build:hooks before this test");
+    for (const filePath of ["", " \t"]) {
+      const root = projectRoot();
+      try {
+        installCompiledHooks(root);
+        const result = spawnSync(process.execPath, [path.join(root, ".wolf", "hooks", "post-write.js")], {
+          input: JSON.stringify({
+            hook_event_name: "PostToolUse",
+            tool_name: "Write",
+            session_id: "empty-write",
+            tool_input: { file_path: filePath, content: "ignored" },
+          }),
+          encoding: "utf-8",
+          env: { ...process.env, CODEX_PROJECT_ROOT: root },
+        });
+        assert.strictEqual(result.status, 0, JSON.stringify(filePath));
+        assert.strictEqual(result.stdout, "", JSON.stringify(filePath));
+        assert.strictEqual(result.stderr, "", JSON.stringify(filePath));
+        assert.ok(!fs.existsSync(path.join(root, ".wolf", "anatomy.md")), JSON.stringify(filePath));
+        assert.ok(!fs.existsSync(path.join(root, ".wolf", "memory.md")), JSON.stringify(filePath));
+        assert.ok(!fs.existsSync(path.join(root, ".wolf", "hooks", "sessions", "empty-write.json")), JSON.stringify(filePath));
       } finally {
         fs.rmSync(root, { recursive: true, force: true });
       }
