@@ -24,8 +24,8 @@ function project<T>(setup: (root: string) => void, body: (root: string) => T): T
   });
 }
 
-function run(root: string, json = true) {
-  const out = spawnSync(process.execPath, [check, root, ...(json ? ["--json"] : [])], { encoding: "utf-8" });
+function run(root: string, json = true, selfcheck = false) {
+  const out = spawnSync(process.execPath, [check, root, ...(json ? ["--json"] : []), ...(selfcheck ? ["--selfcheck"] : [])], { encoding: "utf-8" });
   assert.strictEqual(out.status, 0, out.stderr);
   return json ? JSON.parse(out.stdout) : out.stdout;
 }
@@ -188,11 +188,10 @@ describe("openwolf-check provider evidence", () => {
     });
   });
 
-  test("a configured Codex surface with no hook files fails selfcheck", () => {
+  test("a configured Codex surface remains read-only until an explicit selfcheck", () => {
     project(codexConfig, (root) => {
-      const json = run(root);
-      assert.deepStrictEqual(json.providers.codex, { configured: true, self_tested: false, receipt: "unknown", health: "failed", diagnostic: "Codex hook selfcheck failed" });
-      assert.match(run(root, false), /codex.*configured.*failed/i);
+      assert.deepStrictEqual(run(root).providers.codex, { configured: true, self_tested: false, receipt: "unknown", health: "unknown" });
+      assert.deepStrictEqual(run(root, true, true).providers.codex, { configured: true, self_tested: false, receipt: "unknown", health: "failed", diagnostic: "Codex hook selfcheck failed" });
     });
   });
 
@@ -205,7 +204,9 @@ describe("openwolf-check provider evidence", () => {
       fs.writeFileSync(path.join(dir, "user-hook.js"), `require("node:fs").writeFileSync(${JSON.stringify(userHookMarker)}, "ran");`, "utf-8");
       selfcheckHooks(dir);
     }, (root) => {
-      const providers = run(root).providers;
+      assert.deepStrictEqual(run(root).providers.codex, { configured: true, self_tested: false, receipt: "unknown", health: "unknown" });
+      assert.strictEqual(fs.existsSync(path.join(root, "selfcheck-calls.txt")), false);
+      const providers = run(root, true, true).providers;
       assert.deepStrictEqual(providers.codex, { configured: true, self_tested: true, receipt: "unknown", health: "self-tested" });
       assert.deepStrictEqual(providers.claude, { configured: false, self_tested: false, receipt: "unknown", health: "unknown" });
       assert.deepStrictEqual(fs.readFileSync(path.join(root, "selfcheck-calls.txt"), "utf-8").trim().split("\n"), codexHookScripts);
@@ -213,19 +214,26 @@ describe("openwolf-check provider evidence", () => {
     });
   });
 
+  test("README documents read-only inspection and explicit Codex selfcheck", () => {
+    const readme = fs.readFileSync(path.join(import.meta.dirname, "..", "README.md"), "utf-8");
+    assert.match(readme, /node scripts\/openwolf-check\.mjs --selfcheck/);
+    assert.match(readme, /default.*read-only/i);
+    assert.match(readme, /configured.*self-tested.*active/i);
+  });
+
   test("Codex receipt claims never promote health through selfchecks", () => {
     const active = project((dir) => {
       codexConfig(dir);
       receipts(dir, [{ ended: "2000-01-01T00:00:00Z", status: "confirmed", provider: "codex" }]);
       selfcheckHooks(dir);
-    }, run).providers.codex;
+    }, (root) => run(root, true, true)).providers.codex;
     assert.deepStrictEqual(active, { configured: true, self_tested: true, receipt: "unknown", health: "self-tested" });
 
     const selfcheckFailure = project((dir) => {
       codexConfig(dir);
       receipts(dir, [{ ended: "2000-01-01T00:00:00Z", status: "confirmed", provider: "codex" }]);
       selfcheckHooks(dir, { fail: "post-bash.js" });
-    }, run).providers.codex;
+    }, (root) => run(root, true, true)).providers.codex;
     assert.strictEqual(selfcheckFailure.health, "failed", "a selfcheck failure remains independently authoritative");
 
     const recovered = project((dir) => {
@@ -234,7 +242,7 @@ describe("openwolf-check provider evidence", () => {
         { ended: "2000-01-01T00:00:00Z", status: "failed", provider: "codex" },
         { ended: "2000-01-01T01:00:00Z", status: "confirmed", provider: "codex" },
       ]);
-    }, run).providers.codex;
+    }, (root) => run(root, true, true)).providers.codex;
     assert.strictEqual(recovered.health, "failed", "a configured Codex surface still fails when its canonical hooks are unavailable");
   });
 
@@ -314,7 +322,7 @@ describe("openwolf-check provider evidence", () => {
         { ended: "2026-09-01T00:00:00Z", status: "failed" },
         { ended: "2026-09-01T01:00:00Z", status: "confirmed" },
       ]);
-    }, run);
+    }, (root) => run(root, true, true));
     assert.strictEqual(recovered.providers.claude.health, "active");
 
     const reversed = project((dir) => {
@@ -372,7 +380,7 @@ describe("openwolf-check provider evidence", () => {
     const evidence = project((dir) => {
       codexConfig(dir);
       selfcheckHooks(dir, { omit: "post-bash.js" });
-    }, run).providers.codex;
+    }, (root) => run(root, true, true)).providers.codex;
     assert.strictEqual(evidence.health, "failed");
     assert.strictEqual(evidence.diagnostic, "Codex hook selfcheck failed");
     assert.doesNotMatch(JSON.stringify(evidence), /post-bash|outside|\.wolf/);
