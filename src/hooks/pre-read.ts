@@ -93,6 +93,11 @@ async function main(): Promise<void> {
   // handling stays hands-off for them.
   const isSubagent = event ? event.isSubagent !== false : typeof input.agent_id === "string" && input.agent_id.length > 0;
 
+  // Codex does not document main-thread authority in its hook payload. Treat
+  // that unknown state as non-enforcing: advisory text would still be a policy
+  // action against a context whose ownership we cannot establish.
+  if (event?.isSubagent === "unknown") return;
+
   const normalizedFile = normalizePath(filePath);
 
   // Paths outside the project root are not this project's business. A string
