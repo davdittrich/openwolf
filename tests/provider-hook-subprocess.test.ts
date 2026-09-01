@@ -185,9 +185,17 @@ describe("provider Bash boundary", () => {
     const claudeRoot = tmpProject();
     const codexRoot = tmpProject();
     const stdout = Array.from({ length: 600 }, (_, index) => `line ${index}`).join("\n");
-    const payload = JSON.stringify({
+    const codexPayload = JSON.stringify({
       hook_event_name: "PostToolUse",
       tool_name: "Bash",
+      session_id: "provider-session",
+      tool_use_id: "bash-1",
+      tool_input: { command: "pnpm test" },
+      tool_response: { stdout, stderr: "", exitCode: 0 },
+    });
+    // Claude's PostToolUse runner already fixes this context, so established
+    // payloads may omit the redundant transport labels.
+    const claudePayload = JSON.stringify({
       session_id: "provider-session",
       tool_use_id: "bash-1",
       tool_input: { command: "pnpm test" },
@@ -199,8 +207,8 @@ describe("provider Bash boundary", () => {
       installHooks(codexRoot);
       fs.writeFileSync(path.join(claudeRoot, ".wolf", "config.json"), config);
       fs.writeFileSync(path.join(codexRoot, ".wolf", "config.json"), config);
-      const claude = runPostBash(claudeRoot, payload, "claude");
-      const codex = runPostBash(codexRoot, payload, "codex");
+      const claude = runPostBash(claudeRoot, claudePayload, "claude");
+      const codex = runPostBash(codexRoot, codexPayload, "codex");
       assert.strictEqual(claude.status, 0);
       assert.strictEqual(codex.status, 0);
       assert.strictEqual(claude.stderr, "");
