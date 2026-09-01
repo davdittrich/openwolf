@@ -3,6 +3,9 @@ import * as assert from "node:assert";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { spawnSync } from "node:child_process";
+
+const DIST_HOOKS = path.resolve(import.meta.dirname, "..", "dist", "hooks");
 
 const patchCommand = [
   "*** Begin Patch",
@@ -20,6 +23,15 @@ function projectRoot(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openwolf-provider-boundary-"));
   fs.mkdirSync(path.join(root, "src"), { recursive: true });
   return root;
+}
+
+function installCompiledHooks(root: string): void {
+  const hooksDir = path.join(root, ".wolf", "hooks");
+  fs.mkdirSync(hooksDir, { recursive: true });
+  for (const file of fs.readdirSync(DIST_HOOKS)) {
+    if (file.endsWith(".js")) fs.copyFileSync(path.join(DIST_HOOKS, file), path.join(hooksDir, file));
+  }
+  fs.writeFileSync(path.join(hooksDir, "package.json"), JSON.stringify({ type: "module" }));
 }
 
 describe("provider hook boundary", () => {
@@ -96,6 +108,35 @@ describe("provider hook boundary", () => {
       ]) {
         assert.strictEqual(extractAffectedPatchPaths(command, root), null, command);
       }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test("drives every accepted Codex patch path through the compiled post-write bookkeeping once", () => {
+    assert.ok(fs.existsSync(path.join(DIST_HOOKS, "post-write.js")), "run pnpm build:hooks before this test");
+    const root = projectRoot();
+    try {
+      installCompiledHooks(root);
+      for (const file of ["src/a.ts", "src/b.ts", "src/c.ts"]) {
+        fs.writeFileSync(path.join(root, file), "export {};\n");
+      }
+      const result = spawnSync(process.execPath, [path.join(root, ".wolf", "hooks", "post-write.js")], {
+        input: JSON.stringify({
+          hook_event_name: "PostToolUse",
+          tool_name: "apply_patch",
+          session_id: "session-1",
+          tool_input: { command: patchCommand },
+        }),
+        encoding: "utf-8",
+        env: { ...process.env, CODEX_PROJECT_ROOT: root },
+      });
+      assert.strictEqual(result.status, 0);
+      assert.strictEqual(result.stdout, "");
+      assert.strictEqual(result.stderr, "");
+      const session = JSON.parse(fs.readFileSync(path.join(root, ".wolf", "hooks", "sessions", "session-1.json"), "utf-8"));
+      assert.deepStrictEqual(session.files_written.map((entry: { file: string }) => entry.file), ["src/a.ts", "src/b.ts", "src/c.ts"]);
+      assert.deepStrictEqual(Object.keys(session.edit_counts), ["src/a.ts", "src/b.ts", "src/c.ts"]);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
