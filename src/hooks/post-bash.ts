@@ -80,7 +80,10 @@ async function main(): Promise<void> {
     return;
   }
 
-  const normalized = decodeProviderHook(provider, raw, getProjectDir());
+  const normalized = decodeProviderHook(provider, raw, getProjectDir(), undefined, {
+    eventName: "PostToolUse",
+    toolName: "Bash",
+  });
   if (normalized?.eventName !== "PostToolUse" || normalized.toolName !== "Bash") return;
 
   const command = normalized.command;

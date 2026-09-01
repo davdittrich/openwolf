@@ -3,6 +3,10 @@ import * as path from "node:path";
 export type HookProvider = "claude" | "codex" | "unknown";
 export type SubagentAuthority = true | false | "unknown";
 export type ProjectPathResolver = (root: string, target: string) => string | null;
+export interface HookContext {
+  eventName: NormalizedHookEvent["eventName"];
+  toolName: NormalizedHookEvent["toolName"];
+}
 
 export interface NormalizedHookEvent {
   provider: "claude" | "codex";
@@ -96,6 +100,7 @@ export function decodeProviderHook(
   raw: string,
   projectRoot: string,
   resolvePath?: ProjectPathResolver,
+  context?: HookContext,
 ): NormalizedHookEvent | null {
   if (provider === "unknown" || !projectRoot) return null;
 
@@ -108,8 +113,8 @@ export function decodeProviderHook(
   const event = record(input);
   if (event === null) return null;
   const toolInput = record(event?.tool_input);
-  const toolName = event?.tool_name;
-  const eventName = event?.hook_event_name;
+  const toolName = event?.tool_name ?? context?.toolName;
+  const eventName = event?.hook_event_name ?? context?.eventName;
   if (
     (eventName !== "PreToolUse" && eventName !== "PostToolUse") ||
     (toolName !== "Bash" && toolName !== "Read" && toolName !== "apply_patch")
