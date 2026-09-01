@@ -55,8 +55,8 @@ export function extractAffectedPatchPaths(
   projectRoot: string,
   resolvePath?: ProjectPathResolver,
 ): string[] | null {
-  if (!resolvePath || !projectRoot || command.length === 0 || command.length > MAX_PATCH_BYTES) return null;
-  const lines = command.replace(/\r\n/g, "\n").split("\n");
+  if (!resolvePath || !projectRoot || command.length === 0 || Buffer.byteLength(command, "utf8") > MAX_PATCH_BYTES) return null;
+  const lines = command.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, "").replace(/\r\n/g, "\n").split("\n");
   if (lines[0] !== PATCH_START || lines.at(-1) !== PATCH_END) return null;
 
   const paths: string[] = [];
