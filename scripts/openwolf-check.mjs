@@ -66,8 +66,37 @@ function configuredClaude() {
 
 function configuredCodex() {
   const parsed = readJson(path.join(root, ".codex", "hooks.json"));
-  return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) &&
-    parsed.hooks !== null && typeof parsed.hooks === "object" && !Array.isArray(parsed.hooks);
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed) ||
+    parsed.hooks === null || typeof parsed.hooks !== "object" || Array.isArray(parsed.hooks)) return false;
+
+  const config = read(path.join(root, ".codex", "config.toml"));
+  if (config === null) return false;
+  let section = "";
+  let enabled = false;
+  for (const line of config.split(/\r?\n/)) {
+    const source = line.replace(/\s+#.*$/, "");
+    const heading = source.match(/^\s*\[([\w-]+)\]\s*$/);
+    if (heading) {
+      section = heading[1];
+      continue;
+    }
+    if (section === "features" && /^\s*hooks\s*=\s*true\s*$/.test(source)) enabled = true;
+  }
+  if (!enabled) return false;
+
+  const commands = [];
+  const collectCommands = (value) => {
+    if (Array.isArray(value)) return value.forEach(collectCommands);
+    if (!value || typeof value !== "object") return;
+    for (const [key, child] of Object.entries(value)) {
+      if (key === "command" && typeof child === "string") commands.push(child);
+      else collectCommands(child);
+    }
+  };
+  collectCommands(parsed.hooks);
+  return ["session-start.js", "pre-read.js", "pre-write.js", "post-read.js", "post-write.js", "precompact.js", "stop.js"].every(
+    (script) => commands.some((command) => command.includes(`.wolf/hooks/${script}`) || command.includes(`.wolf\\hooks\\${script}`)),
+  );
 }
 
 function selfcheck() {
