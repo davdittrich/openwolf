@@ -75,11 +75,27 @@ Then use your agents as normal.
 | Agent | Integration |
 |-------|-------------|
 | Claude Code | Full: 12 hooks, output governor, skills, verified measurement |
-| Codex CLI | Core hooks via `.codex/hooks.json` + `AGENTS.md`: session, read, write, compaction, stop |
+| Codex CLI | Core hooks via `.codex/hooks.json` + `AGENTS.md`: session, read, write, Bash, compaction, stop |
 | OpenCode | Native plugin + `AGENTS.md`: session and tool before/after |
 | Cursor | Rules file (context only) |
 | Gemini CLI | `GEMINI.md` block (context only) |
 | Antigravity | `AGENTS.md` block (context only) |
+
+## Codex hook coverage
+
+`buildCodexHooks` installs `SessionStart`; `PreToolUse` and `PostToolUse`
+handlers for `Read`, `Edit`/`Write`/`MultiEdit`/`apply_patch`, and `Bash`;
+plus `PreCompact` and `Stop`. It preserves unrelated user hook entries when
+it updates `.codex/hooks.json`.
+
+On Codex, the `PostToolUse` `Bash` hook is advisory and pass-through: it can
+add supported context, but it does not change the tool result or establish
+savings. Claude Code alone uses its supported output-governor rewrite
+path.
+
+There is no documented Codex delivery receipt. An installed-hook selfcheck
+reports `self-tested`, not `active`; `active` requires an observed provider
+receipt.
 
 All agents share the same `.wolf/` directory. It ships with a `.gitignore`
 that commits the useful state (conventions, handoff, bug log, index) and

@@ -149,3 +149,36 @@ describe("hook install completeness (#68)", () => {
     });
   }
 });
+
+describe("Codex installed hook documentation (#18)", () => {
+  const root = path.join(import.meta.dirname, "..");
+  const codexAdapter = fs.readFileSync(path.join(root, "src", "agents", "codex.ts"), "utf-8");
+  const readme = fs.readFileSync(path.join(root, "README.md"), "utf-8");
+  const codexDocs = readme.match(/## Codex hook coverage[\s\S]*?(?=\n## |$)/)?.[0] ?? "";
+
+  test("README names the lifecycle surface buildCodexHooks installs", () => {
+    for (const [event, matcher, script] of [
+      ["SessionStart", "startup|resume|clear", "session-start.js"],
+      ["PreToolUse", "Read", "pre-read.js"],
+      ["PreToolUse", "Edit|Write|MultiEdit|apply_patch", "pre-write.js"],
+      ["PreToolUse", "Bash", "pre-bash.js"],
+      ["PostToolUse", "Read", "post-read.js"],
+      ["PostToolUse", "Edit|Write|MultiEdit|apply_patch", "post-write.js"],
+      ["PostToolUse", "Bash", "post-bash.js"],
+      ["PreCompact", "", "precompact.js"],
+      ["Stop", "", "stop.js"],
+    ]) {
+      assert.ok(codexAdapter.includes(`matcher: "${matcher}"`) && codexAdapter.includes(`"${script}"`), `${event} ${matcher} must install ${script}`);
+    }
+    assert.match(codexDocs, /Codex hook coverage/i);
+    assert.match(codexDocs, /SessionStart.*Read.*apply_patch.*Bash.*PreCompact.*Stop/is);
+  });
+
+  test("README preserves Codex Bash and receipt authority limits", () => {
+    assert.match(codexDocs, /Codex.*PostToolUse.*Bash.*advisory.*pass-through/is);
+    assert.doesNotMatch(codexDocs, /Codex.*Bash.*replacement/is);
+    assert.doesNotMatch(codexDocs, /Codex.*Bash.*savings authority/is);
+    assert.match(codexDocs, /no documented Codex delivery receipt/i);
+    assert.match(codexDocs, /selfcheck.*self-tested.*not.*active/is);
+  });
+});
