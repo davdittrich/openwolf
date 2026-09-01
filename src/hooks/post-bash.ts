@@ -2,8 +2,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 import {
-  getWolfDir, ensureWolfDir, readJSON, writeJSON, readStdin, emitHookJSON,
-  hookMain, getSessionFilePath, normalizePath, getProjectDir, projectRelativePath
+  getWolfDir, ensureWolfDir, readJSON, writeJSON, readStdin,
+  hookMain, getSessionFilePath, normalizePath, getProjectDir, projectRelativePath, detectAgent
 } from "./shared.js";
 import {
   classifyCommand, condenseOutput, estimateTokens,
@@ -11,6 +11,7 @@ import {
 } from "./bash-output-governor.js";
 import { parseBashRead } from "./bash-path-parser.js";
 import { mutateJSON, HOOK_LOCK_BUDGET_MS } from "./anatomy-lock.js";
+import { encodeProviderResponse, type HookProvider } from "./provider-boundary.js";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // PostToolUse[Bash] governor (2.3 flagship). Bash results are 48.3% of all
@@ -40,6 +41,11 @@ function governorConfig(wolfDir: string): GovernorConfig {
   };
 }
 
+function hookProvider(): HookProvider {
+  const agent = detectAgent();
+  return agent === "claude" || agent === "codex" ? agent : "unknown";
+}
+
 interface GovernedRecord {
   /** Whether the full output is actually recoverable from the cache (#82). */
   preserved?: boolean;
@@ -58,6 +64,7 @@ interface BashSessionState {
 async function main(): Promise<void> {
   ensureWolfDir();
   const wolfDir = getWolfDir();
+  const provider = hookProvider();
 
   const raw = await readStdin();
   let input: {
@@ -175,12 +182,12 @@ async function main(): Promise<void> {
         } catch {}
 
         if (effectiveAction === "replace") {
-          // Mirror the received object exactly; change ONLY stdout. A shape
-          // mismatch makes the harness silently ignore the replacement.
-          emitHookJSON("PostToolUse", {
-            updatedToolOutput: { ...resp, stdout: result.text },
+          const encoded = encodeProviderResponse(provider, {
+            kind: "replace",
+            toolResponse: { ...resp, stdout: result.text },
             additionalContext: notes.length > 0 ? notes.join("\n") : undefined,
           });
+          if (encoded) process.stdout.write(encoded);
           return;
         }
         const copyNote = preserved
@@ -194,7 +201,12 @@ async function main(): Promise<void> {
   }
 
   if (notes.length > 0) {
-    emitHookJSON("PostToolUse", { additionalContext: notes.join("\n") });
+    const encoded = encodeProviderResponse(provider, {
+      kind: "advisory",
+      eventName: "PostToolUse",
+      text: notes.join("\n"),
+    });
+    if (encoded) process.stdout.write(encoded);
   }
 }
 

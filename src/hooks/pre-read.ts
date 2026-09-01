@@ -7,7 +7,7 @@ import {
 } from "./shared.js";
 import { lookupEntry } from "./anatomy-store.js";
 import { mutateJSON, HOOK_LOCK_BUDGET_MS } from "./anatomy-lock.js";
-import { decodeProviderHook, type HookProvider } from "./provider-boundary.js";
+import { decodeProviderHook, encodeProviderResponse, type HookProvider } from "./provider-boundary.js";
 
 interface FileRead {
   count: number;
@@ -271,14 +271,19 @@ async function main(): Promise<void> {
   });
 
   if (denyReason !== null) {
-    emitHookJSON("PreToolUse", {
-      permissionDecision: "deny",
-      permissionDecisionReason: denyReason,
-    });
+    const encoded = event
+      ? encodeProviderResponse(event.provider, { kind: "deny", reason: denyReason })
+      : "";
+    if (encoded) process.stdout.write(encoded);
+    else emitHookJSON("PreToolUse", { permissionDecision: "deny", permissionDecisionReason: denyReason });
     return;
   }
   if (notes.length > 0) {
-    emitHookJSON("PreToolUse", { additionalContext: notes.join("\n") });
+    const encoded = event
+      ? encodeProviderResponse(event.provider, { kind: "advisory", text: notes.join("\n") })
+      : "";
+    if (encoded) process.stdout.write(encoded);
+    else emitHookJSON("PreToolUse", { additionalContext: notes.join("\n") });
   }
 }
 

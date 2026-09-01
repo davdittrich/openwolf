@@ -20,8 +20,9 @@ export interface NormalizedHookEvent {
 
 export type ProviderResponseIntent =
   | { kind: "pass" }
-  | { kind: "advisory"; text: string }
-  | { kind: "deny"; reason: string };
+  | { kind: "advisory"; text: string; eventName?: "PreToolUse" | "PostToolUse" }
+  | { kind: "deny"; reason: string }
+  | { kind: "replace"; toolResponse: Record<string, unknown>; additionalContext?: string };
 
 const MAX_PATCH_BYTES = 1024 * 1024;
 const PATCH_START = "*** Begin Patch";
@@ -109,6 +110,7 @@ export function decodeProviderHook(
     (eventName !== "PreToolUse" && eventName !== "PostToolUse") ||
     (toolName !== "Bash" && toolName !== "Read" && toolName !== "apply_patch")
   ) return null;
+  if (toolName !== "apply_patch" && eventName !== "PreToolUse") return null;
 
   const base = {
     provider,
@@ -139,12 +141,19 @@ export function decodeProviderHook(
 /** Encode only the PreToolUse responses both providers currently support. */
 export function encodeProviderResponse(provider: HookProvider, intent: ProviderResponseIntent): string {
   if (provider === "unknown" || intent.kind === "pass") return "";
+  if (intent.kind === "replace") {
+    if (provider === "claude") {
+      const hookSpecificOutput: Record<string, unknown> = { hookEventName: "PostToolUse" };
+      if (intent.additionalContext) hookSpecificOutput.additionalContext = intent.additionalContext;
+      hookSpecificOutput.updatedToolOutput = intent.toolResponse;
+      return JSON.stringify({ hookSpecificOutput });
+    }
+    return intent.additionalContext
+      ? JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: intent.additionalContext } })
+      : "";
+  }
   const hookSpecificOutput = intent.kind === "deny"
-    ? {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: intent.reason,
-      }
-    : { hookEventName: "PreToolUse", additionalContext: intent.text };
+    ? { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: intent.reason }
+    : { hookEventName: intent.eventName ?? "PreToolUse", additionalContext: intent.text };
   return JSON.stringify({ hookSpecificOutput });
 }
