@@ -195,6 +195,12 @@ describe("provider Bash boundary", () => {
       assert.deepStrictEqual(Object.keys(claudeOutput.hookSpecificOutput.updatedToolOutput), ["stdout", "stderr", "exitCode"]);
       assert.notStrictEqual(claudeOutput.hookSpecificOutput.updatedToolOutput.stdout, stdout);
       assert.strictEqual(codex.stdout, "");
+      const claudeRecord = JSON.parse(fs.readFileSync(path.join(claudeRoot, ".wolf", "hooks", "sessions", "provider-session.json"), "utf-8")).bash_governed.at(-1);
+      const codexRecord = JSON.parse(fs.readFileSync(path.join(codexRoot, ".wolf", "hooks", "sessions", "provider-session.json"), "utf-8")).bash_governed.at(-1);
+      assert.strictEqual(claudeRecord.action, "replaced");
+      assert.ok(claudeRecord.entered_tokens < claudeRecord.original_tokens);
+      assert.strictEqual(codexRecord.action, "suggested");
+      assert.strictEqual(codexRecord.entered_tokens, codexRecord.original_tokens);
     } finally {
       fs.rmSync(claudeRoot, { recursive: true, force: true });
       fs.rmSync(codexRoot, { recursive: true, force: true });

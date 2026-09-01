@@ -166,11 +166,19 @@ async function main(): Promise<void> {
       // through to the notes flush below rather than returning, so an earlier
       // dedupe advisory is not swallowed with it.
       if (probe && result) {
+        const encoded = effectiveAction === "replace"
+          ? encodeProviderResponse(provider, {
+            kind: "replace",
+            toolResponse: { ...resp, stdout: result.text },
+            additionalContext: notes.length > 0 ? notes.join("\n") : undefined,
+          })
+          : "";
+        const deliveredReplacement = provider === "claude" && encoded.length > 0;
         const record: GovernedRecord = {
           family,
-          action: effectiveAction === "replace" ? "replaced" : "suggested",
+          action: deliveredReplacement ? "replaced" : "suggested",
           original_tokens: result.original_tokens,
-          entered_tokens: effectiveAction === "replace" ? result.condensed_tokens : result.original_tokens,
+          entered_tokens: deliveredReplacement ? result.condensed_tokens : result.original_tokens,
           at: new Date().toISOString(),
           preserved,
         };
@@ -182,11 +190,6 @@ async function main(): Promise<void> {
         } catch {}
 
         if (effectiveAction === "replace") {
-          const encoded = encodeProviderResponse(provider, {
-            kind: "replace",
-            toolResponse: { ...resp, stdout: result.text },
-            additionalContext: notes.length > 0 ? notes.join("\n") : undefined,
-          });
           if (encoded) process.stdout.write(encoded);
           return;
         }
