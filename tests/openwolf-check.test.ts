@@ -128,6 +128,8 @@ describe("openwolf-check provider evidence", () => {
       { name: "missing pre-Bash mapping", config: "[features]\nhooks = true\n", hooks: (root: string) => codexHooks(root, codexHookRecords.filter(({ script }) => script !== "pre-bash.js")) },
       { name: "missing post-Bash mapping", config: "[features]\nhooks = true\n", hooks: (root: string) => codexHooks(root, codexHookRecords.filter(({ script }) => script !== "post-bash.js")) },
       { name: "wrong command type", config: "[features]\nhooks = true\n", hooks: (root: string) => ({ hooks: { ...codexHooks(root).hooks, Stop: [{ matcher: "", hooks: [{ type: "mcp_tool", command: `node \"${path.join(root, ".wolf", "hooks", "stop.js")}\"` }] }] } }) },
+      { name: "nested event decoy", config: "[features]\nhooks = true\n", hooks: (root: string) => ({ hooks: { ...codexHooks(root).hooks, SessionStart: { nested: codexHooks(root).hooks.SessionStart } } }) },
+      { name: "nested matcher decoy", config: "[features]\nhooks = true\n", hooks: (root: string) => ({ hooks: { ...codexHooks(root).hooks, SessionStart: [{ nested: codexHooks(root).hooks.SessionStart?.[0] }] } }) },
       { name: "empty hook object", config: "[features]\nhooks = true\n", hooks: { hooks: {} } },
     ];
 
