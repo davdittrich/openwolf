@@ -119,6 +119,35 @@ describe("provider hook boundary", () => {
     }
   });
 
+  test("accepts only Rust Unicode White_Space around a complete Codex patch", async () => {
+    const { extractAffectedPatchPaths } = await import("../src/hooks/provider-boundary.ts");
+    const root = projectRoot();
+    try {
+      for (const command of [
+        patchCommand,
+        ` \t\r\n${patchCommand}\r\n\t `,
+        `\u0085${patchCommand}\u0085`,
+      ]) {
+        assert.deepStrictEqual(
+          extractAffectedPatchPaths(command, root, relativePath),
+          ["src/a.ts", "src/b.ts", "src/c.ts"],
+          command,
+        );
+      }
+      for (const command of [
+        `\uFEFF${patchCommand}`,
+        `${patchCommand}\uFEFF`,
+        `${patchCommand}\0`,
+        `${patchCommand}\nnot whitespace`,
+        `${patchCommand}\n*** End Patch`,
+      ]) {
+        assert.strictEqual(extractAffectedPatchPaths(command, root, relativePath), null, command);
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test("keeps malformed Codex patches out of compiled post-write bookkeeping", () => {
     assert.ok(fs.existsSync(path.join(DIST_HOOKS, "post-write.js")), "run pnpm build:hooks before this test");
     for (const command of [
@@ -149,6 +178,44 @@ describe("provider hook boundary", () => {
         assert.ok(!fs.existsSync(path.join(root, ".wolf", "anatomy.md")), command);
         assert.ok(!fs.existsSync(path.join(root, ".wolf", "memory.md")), command);
         assert.ok(!fs.existsSync(path.join(root, ".wolf", "hooks", "sessions", "malformed-patch.json")), command);
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test("keeps outer whitespace valid and non-whitespace suffixes out of compiled post-write bookkeeping", () => {
+    assert.ok(fs.existsSync(path.join(DIST_HOOKS, "post-write.js")), "run pnpm build:hooks before this test");
+    for (const [command, writes] of [
+      [`\u0085${patchCommand}\u0085`, true],
+      [`${patchCommand}\nnot whitespace`, false],
+      [`${patchCommand}\uFEFF`, false],
+    ] as const) {
+      const root = projectRoot();
+      try {
+        installCompiledHooks(root);
+        for (const file of ["src/a.ts", "src/b.ts", "src/c.ts"]) {
+          fs.writeFileSync(path.join(root, file), "export {};\n");
+        }
+        const result = spawnSync(process.execPath, [path.join(root, ".wolf", "hooks", "post-write.js")], {
+          input: JSON.stringify({
+            hook_event_name: "PostToolUse",
+            tool_name: "apply_patch",
+            session_id: "outer-whitespace",
+            tool_input: { command },
+          }),
+          encoding: "utf-8",
+          env: { ...process.env, CODEX_PROJECT_ROOT: root },
+        });
+        assert.strictEqual(result.status, 0, command);
+        assert.strictEqual(result.stdout, "", command);
+        assert.strictEqual(result.stderr, "", command);
+        const sessionFile = path.join(root, ".wolf", "hooks", "sessions", "outer-whitespace.json");
+        assert.strictEqual(fs.existsSync(sessionFile), writes, command);
+        if (writes) {
+          const session = JSON.parse(fs.readFileSync(sessionFile, "utf-8"));
+          assert.deepStrictEqual(session.files_written.map((entry: { file: string }) => entry.file), ["src/a.ts", "src/b.ts", "src/c.ts"]);
+        }
       } finally {
         fs.rmSync(root, { recursive: true, force: true });
       }
