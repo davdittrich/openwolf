@@ -151,3 +151,23 @@ Fires when the agent finishes a response.
 
 Final ledger flush on clear/logout/exit, plus a one-line session summary in
 `memory.md`.
+
+## Codex topology and health checker
+
+Codex uses the generated current-project `.codex/hooks.json` surface: a
+`SessionStart` handler; `PreToolUse` and `PostToolUse` handlers for `Read`,
+`Edit`/`Write`/`MultiEdit`/`apply_patch`, and `Bash`; then `PreCompact` and
+`Stop`. Its `PostToolUse` output is pass-through or advisory only: Codex does
+not use it to replace a tool result.
+
+Hooks are **default-on** when `.codex/config.toml` or its `[features]` hook key
+is absent. Canonical `hooks` and deprecated `codex_hooks` are accepted;
+explicit `hooks = false` (or the alias) disables them. Malformed, duplicate,
+or conflicting values fail closed for checking, while installation preserves
+the existing config bytes.
+
+Run `node scripts/openwolf-check.mjs [project-directory] --json` to inspect
+the current project without executing project hook code. `--selfcheck` opts
+into the bounded canonical-script check. The evidence states are `configured`,
+`self-tested`, `active`, `unknown`, and `failed`; only an observed provider
+receipt can make health `active`.

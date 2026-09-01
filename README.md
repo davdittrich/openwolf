@@ -105,6 +105,20 @@ canonical hook selfcheck. `configured` proves the installed shape,
 `self-tested` proves those canonical scripts loaded, and `active` requires a
 provider receipt; user hook commands are never part of the selfcheck.
 
+Codex hooks are **default-on**: no `.codex/config.toml`, or no hook key in its
+`[features]` section, leaves them enabled. The checker accepts canonical
+`hooks` and deprecated `codex_hooks`; explicit `hooks = false` (or the alias)
+disables them. Malformed, duplicate, or conflicting feature facts fail closed
+for checking, while installation preserves the user's config bytes. Check the
+current project (or name another root) with
+`node scripts/openwolf-check.mjs [project-directory] --json`.
+
+Health is always one of `configured`, `self-tested`, `active`, `unknown`, or
+`failed`. It is evidence, not a configuration claim: a valid current-project
+topology can be configured without having a provider receipt. Codex
+`PostToolUse` output remains pass-through or advisory; it never replaces tool
+output.
+
 All agents share the same `.wolf/` directory. It ships with a `.gitignore`
 that commits the useful state (conventions, handoff, bug log, index) and
 ignores the machine-local runtime (ledgers, caches). On Claude Code the

@@ -59,6 +59,26 @@ Design rules that hold everywhere:
 - Session state is keyed by the harness session id, so concurrent sessions
   in one project never contaminate each other's tracking.
 
+### Codex boundary and checker
+
+Codex receives the generated current-project `.codex/hooks.json` topology:
+`SessionStart`; `PreToolUse` and `PostToolUse` for `Read`,
+`Edit`/`Write`/`MultiEdit`/`apply_patch`, and `Bash`; `PreCompact`; and `Stop`.
+Its `PostToolUse` output is pass-through or advisory, never a replacement for
+the tool result.
+
+Codex hooks are **default-on** when `.codex/config.toml` or its `[features]`
+key is absent. Both `hooks` and deprecated `codex_hooks` are understood;
+explicit `hooks = false` (or its alias) disables the feature. Malformed,
+duplicate, or conflicting feature facts fail closed for checking, but
+installation preserves the user's existing bytes.
+
+`node scripts/openwolf-check.mjs [project-directory] --json` reads the current
+project root only; `--selfcheck` explicitly runs the canonical scripts. Its five
+health states are `configured`, `self-tested`, `active`, `unknown`, and
+`failed`. `active` requires an observed provider receipt, not merely an
+installed configuration.
+
 ## The Bash output governor
 
 Bash results are the largest single source of context waste: grep floods,
