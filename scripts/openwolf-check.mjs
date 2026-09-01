@@ -64,39 +64,56 @@ function configuredClaude() {
   return parsed !== null && typeof parsed === "object" && JSON.stringify(parsed).includes(".wolf/hooks/");
 }
 
+const codexHookSurface = [
+  ["SessionStart", "startup|resume|clear", "session-start.js"],
+  ["PreToolUse", "Read", "pre-read.js"],
+  ["PreToolUse", "Edit|Write|MultiEdit|apply_patch", "pre-write.js"],
+  ["PreToolUse", "Bash", "pre-bash.js"],
+  ["PostToolUse", "Read", "post-read.js"],
+  ["PostToolUse", "Edit|Write|MultiEdit|apply_patch", "post-write.js"],
+  ["PostToolUse", "Bash", "post-bash.js"],
+  ["PreCompact", "", "precompact.js"],
+  ["Stop", "", "stop.js"],
+];
+
 function configuredCodex() {
   const parsed = readJson(path.join(root, ".codex", "hooks.json"));
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed) ||
     parsed.hooks === null || typeof parsed.hooks !== "object" || Array.isArray(parsed.hooks)) return false;
 
-  const config = read(path.join(root, ".codex", "config.toml"));
-  if (config === null) return false;
-  let section = "";
-  let enabled = false;
-  for (const line of config.split(/\r?\n/)) {
+  const configPath = path.join(root, ".codex", "config.toml");
+  const config = read(configPath);
+  if (exists(configPath) && config === null) return false;
+  const feature = (config ?? "").split(/\r?\n/).reduce((state, line) => {
+    if (!state.valid) return state;
     const source = line.replace(/\s+#.*$/, "");
     const heading = source.match(/^\s*\[([\w-]+)\]\s*$/);
-    if (heading) {
-      section = heading[1];
-      continue;
-    }
-    if (section === "features" && /^\s*hooks\s*=\s*true\s*$/.test(source)) enabled = true;
-  }
-  if (!enabled) return false;
+    if (heading) return { ...state, section: heading[1] };
+    if (source.trim().startsWith("[")) return { ...state, valid: false };
+    const hooks = state.section === "features" && source.match(/^\s*hooks\s*=\s*(.*?)\s*$/);
+    if (!hooks) return state;
+    if (state.seen || (hooks[1] !== "true" && hooks[1] !== "false")) return { ...state, valid: false };
+    return { ...state, seen: true, enabled: hooks[1] !== "false" };
+  }, { section: "", enabled: true, seen: false, valid: true });
+  if (!feature.valid || !feature.enabled) return false;
 
-  const commands = [];
-  const collectCommands = (value) => {
-    if (Array.isArray(value)) return value.forEach(collectCommands);
+  const records = [];
+  const collectRecords = (value, event) => {
+    if (Array.isArray(value)) return value.forEach((item) => collectRecords(item, event));
     if (!value || typeof value !== "object") return;
-    for (const [key, child] of Object.entries(value)) {
-      if (key === "command" && typeof child === "string") commands.push(child);
-      else collectCommands(child);
+    if (event !== null && typeof value.matcher === "string" && Array.isArray(value.hooks)) {
+      value.hooks.forEach((handler) => {
+        if (handler && typeof handler === "object") {
+          records.push({ event, matcher: value.matcher, type: handler.type, command: handler.command });
+        }
+      });
     }
+    Object.entries(value).forEach(([key, child]) => collectRecords(child, event ?? key));
   };
-  collectCommands(parsed.hooks);
-  return ["session-start.js", "pre-read.js", "pre-write.js", "post-read.js", "post-write.js", "precompact.js", "stop.js"].every(
-    (script) => commands.some((command) => command.includes(`.wolf/hooks/${script}`) || command.includes(`.wolf\\hooks\\${script}`)),
-  );
+  Object.entries(parsed.hooks).forEach(([event, value]) => collectRecords(value, event));
+  return codexHookSurface.every(([event, matcher, script]) => records.some((record) =>
+    record.event === event && record.matcher === matcher && record.type === "command" &&
+    record.command === `node "${path.join(root, ".wolf", "hooks", script)}"`));
 }
 
 function selfcheck() {

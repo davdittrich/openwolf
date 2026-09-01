@@ -105,9 +105,6 @@ describe("openwolf-check provider evidence", () => {
   test("Codex configuration requires the exact generated hook topology without rewriting either config", () => {
     const invalidConfigs = [
       { name: "disabled feature", config: "[features]\nhooks = false\n", hooks: undefined },
-      { name: "commented assignment", config: "[features]\n# hooks = true\n", hooks: undefined },
-      { name: "foreign section", config: "[other]\nhooks = true\n", hooks: undefined },
-      { name: "webhooks only", config: "[features]\nwebhooks = true\n", hooks: undefined },
       { name: "all mappings under SessionStart", config: "[features]\nhooks = true\n", hooks: { hooks: { SessionStart: codexHookRecords.map(({ matcher, script }) => ({ matcher, hooks: [{ type: "command", command: `node \".wolf/hooks/${script}\"` }] })) } } },
       { name: "foreign-root command", config: "[features]\nhooks = true\n", hooks: (root: string) => codexHooks(root, codexHookRecords.map((record) => record.script === "post-bash.js" ? { ...record, script: "../../foreign/.wolf/hooks/post-bash.js" } : record)) },
       { name: "missing pre-Bash mapping", config: "[features]\nhooks = true\n", hooks: (root: string) => codexHooks(root, codexHookRecords.filter(({ script }) => script !== "pre-bash.js")) },
@@ -132,6 +129,9 @@ describe("openwolf-check provider evidence", () => {
     for (const feature of [
       { name: "omitted config file", config: null },
       { name: "omitted feature", config: "[model]\nname = \"x\"\n" },
+      { name: "commented feature", config: "[features]\n# hooks = true\n" },
+      { name: "foreign-section hook key", config: "[other]\nhooks = true\n" },
+      { name: "webhooks key", config: "[features]\nwebhooks = true\n" },
       { name: "enabled feature", config: "[features]\nhooks = true\n" },
     ]) {
       project((root) => {
