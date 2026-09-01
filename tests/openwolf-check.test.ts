@@ -18,6 +18,17 @@ function withProject<T>(body: (root: string) => T): T {
   }
 }
 
+function withProjectRoot<T>(root: string, body: () => T): T {
+  const previous = process.env.OPENWOLF_PROJECT_ROOT;
+  process.env.OPENWOLF_PROJECT_ROOT = root;
+  try {
+    return body();
+  } finally {
+    if (previous === undefined) delete process.env.OPENWOLF_PROJECT_ROOT;
+    else process.env.OPENWOLF_PROJECT_ROOT = previous;
+  }
+}
+
 function project<T>(setup: (root: string) => void, body: (root: string) => T): T {
   return withProject((root) => {
     setup(root);
@@ -318,7 +329,7 @@ describe("openwolf-check provider evidence", () => {
         type: "hook_success", command: `node \"${path.join(root, ".wolf", "hooks", "session-start.js")}\"`, exitCode: 0,
         stdout: JSON.stringify({ hookSpecificOutput: { additionalContext: "writer evidence" } }), stderr: "",
       } })}\n`, "utf-8");
-      return verifyHookDelivery("claude", transcript);
+      return withProjectRoot(root, () => verifyHookDelivery("claude", transcript));
     });
     const writerFailure = withProject((root) => {
       const transcript = path.join(root, "writer-failure.jsonl");
@@ -326,7 +337,7 @@ describe("openwolf-check provider evidence", () => {
         type: "hook_non_blocking_error", command: `node \"${path.join(root, ".wolf", "hooks", "post-write.js")}\"`, exitCode: 1,
         stdout: "", stderr: "writer failure",
       } })}\n`, "utf-8");
-      return verifyHookDelivery("claude", transcript);
+      return withProjectRoot(root, () => verifyHookDelivery("claude", transcript));
     });
     assert.strictEqual(writerEvidence.status, "confirmed");
     assert.strictEqual(writerFailure.status, "failed");
