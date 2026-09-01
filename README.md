@@ -97,6 +97,14 @@ There is no documented Codex delivery receipt. An installed-hook selfcheck
 reports `self-tested`, not `active`; `active` requires an observed provider
 receipt.
 
+`node scripts/openwolf-check.mjs` inspects hook health; the default command is read-only.
+It validates only the direct generated Codex hook surface and does not execute
+project hook code.
+Run `node scripts/openwolf-check.mjs --selfcheck` to opt in to the bounded
+canonical hook selfcheck. `configured` proves the installed shape,
+`self-tested` proves those canonical scripts loaded, and `active` requires a
+provider receipt; user hook commands are never part of the selfcheck.
+
 All agents share the same `.wolf/` directory. It ships with a `.gitignore`
 that commits the useful state (conventions, handoff, bug log, index) and
 ignores the machine-local runtime (ledgers, caches). On Claude Code the

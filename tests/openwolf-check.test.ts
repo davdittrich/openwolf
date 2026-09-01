@@ -218,7 +218,7 @@ describe("openwolf-check provider evidence", () => {
     const readme = fs.readFileSync(path.join(import.meta.dirname, "..", "README.md"), "utf-8");
     assert.match(readme, /node scripts\/openwolf-check\.mjs --selfcheck/);
     assert.match(readme, /default.*read-only/i);
-    assert.match(readme, /configured.*self-tested.*active/i);
+    assert.match(readme, /configured[\s\S]*self-tested[\s\S]*active/i);
   });
 
   test("Codex receipt claims never promote health through selfchecks", () => {
@@ -313,7 +313,7 @@ describe("openwolf-check provider evidence", () => {
     assert.strictEqual(project((dir) => { codexConfig(dir); receipt(dir, "confirmed"); }, run).providers.claude.health, "active");
     const failed = project((dir) => { codexConfig(dir); receipt(dir, "failed"); }, run).providers;
     assert.strictEqual(failed.claude.health, "failed");
-    assert.strictEqual(failed.codex.health, "failed");
+    assert.strictEqual(failed.codex.health, "unknown");
   });
 
   test("the latest valid receipt supersedes array order, with failed ties fail-closed", () => {
@@ -330,7 +330,7 @@ describe("openwolf-check provider evidence", () => {
         { ended: "2026-09-01T01:00:00Z", status: "confirmed" },
         { ended: "2026-09-01T00:00:00Z", status: "failed" },
       ]);
-    }, run);
+    }, (root) => run(root, true, true));
     assert.strictEqual(reversed.providers.claude.health, "active");
 
     const laterFailure = project((dir) => {
@@ -355,7 +355,7 @@ describe("openwolf-check provider evidence", () => {
       codexConfig(dir);
       receipts(dir, [{ ended: "2000-01-01T00:00:00Z", status: "failed", provider: "codex" }]);
       selfcheckHooks(dir);
-    }, run);
+    }, (root) => run(root, true, true));
     assert.strictEqual(selfTested.providers.codex.health, "self-tested");
 
     const validWins = project((dir) => {

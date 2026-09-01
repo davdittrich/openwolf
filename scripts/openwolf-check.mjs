@@ -6,7 +6,7 @@
  * installed there, which agents are wired, when it was last used, and what
  * it did. Works without OpenWolf installed — it only reads files.
  *
- *   node openwolf-check.mjs [projectDir] [--json]
+ *   node openwolf-check.mjs [projectDir] [--json] [--selfcheck]
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -14,6 +14,7 @@ import { spawnSync } from "node:child_process";
 
 const args = process.argv.slice(2);
 const asJson = args.includes("--json");
+const selfcheckRequested = args.includes("--selfcheck");
 const root = path.resolve(args.find((a) => !a.startsWith("--")) ?? ".");
 const wolfDir = path.join(root, ".wolf");
 
@@ -211,10 +212,10 @@ const lt = ledger?.lifetime ?? {};
 const claudeConfigured = configuredClaude();
 const codexConfigured = configuredCodex();
 const claudeHook = hookFiles.includes("session-start.js") ? "session-start.js" : hookFiles[0];
-const claudeSelfTest = claudeConfigured
+const claudeSelfTest = selfcheckRequested && claudeConfigured
   ? selfcheck(claudeHook ? [claudeHook] : [], "installed hook selfcheck failed")
   : { ran: false, ok: false, diagnostic: null, observedAt: null };
-const codexSelfTest = codexConfigured
+const codexSelfTest = selfcheckRequested && codexConfigured
   ? selfcheck(codexHookSurface.map(([, , script]) => script), "Codex hook selfcheck failed")
   : { ran: false, ok: false, diagnostic: null, observedAt: null };
 report.providers = {
